@@ -1,0 +1,39 @@
+services:
+  ros2-rust:
+    image: syncai-ros2-rust:${ROS_DISTRO:-humble}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        ROS_DISTRO: ${ROS_DISTRO:-humble}
+        # host 端使用者不是 1000 的話（Linux 上常見），用 USER_UID=$(id -u) 覆蓋
+        USER_UID: ${USER_UID:-1000}
+        USER_GID: ${USER_GID:-1000}
+    container_name: syncai-ros2-rust
+    # 用 tini 當 PID 1，才會回收 Ctrl-C 之後留下的 zombie process
+    init: true
+    # 讓容器一直活著，之後用 `docker compose exec` 進去操作
+    command: sleep infinity
+    stdin_open: true
+    tty: true
+    working_dir: /workspace
+    environment:
+      # 同一台機器上要跟別人的 ROS 網路隔離時，改這個編號
+      ROS_DOMAIN_ID: "42"
+      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+    volumes:
+      # 專案原始碼直接掛進去，在 host 編輯、容器內編譯
+      - ./src:/workspace/src
+      # 編譯產物放 named volume，避免拖慢 macOS 的檔案掛載，也不會弄髒 repo
+      - colcon-build:/workspace/build
+      - colcon-install:/workspace/install
+      - colcon-log:/workspace/log
+      - cargo-registry:/home/ros/.cargo/registry
+      - cargo-git:/home/ros/.cargo/git
+
+volumes:
+  colcon-build:
+  colcon-install:
+  colcon-log:
+  cargo-registry:
+  cargo-git:
