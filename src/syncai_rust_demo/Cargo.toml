@@ -1,0 +1,21 @@
+[package]
+name = "syncai_rust_demo"
+version = "0.1.0"
+edition = "2021"
+description = "用 rclrs 寫的最小 ROS 2 publisher / subscriber 範例"
+license = "Apache-2.0"
+
+[[bin]]
+name = "talker"
+path = "src/talker.rs"
+
+[[bin]]
+name = "listener"
+path = "src/listener.rs"
+
+[dependencies]
+# rclrs = ROS 2 的 Rust client library
+rclrs = "0.7"
+# ros-env 會把「目前 workspace 裡已 source 的 ROS 訊息套件」以 crate 形式引入，
+# 所以 std_msgs 之類的型別不必另外寫進 dependencies，只要在 package.xml 宣告即可。
+ros-env = "0.2"
