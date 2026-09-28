@@ -1,7 +1,7 @@
 # SyncAI-ROS2-Rust
 
 用 [`ros2_rust`](https://github.com/ros2-rust/ros2_rust)（`rclrs`）寫 ROS 2 節點的實驗專案。
-內含一組最小的 talker / listener 範例，以及一套 Docker 開發環境。
+內含 `syncai_driver_manager` 節點，以及一套 Docker 開發環境。
 
 ## 為什麼用 Docker
 
@@ -35,23 +35,25 @@ make up
 # 3. 編譯 workspace
 make build
 
-# 4. 開兩個終端機，一個跑 publisher、一個跑 subscriber
-make talker
-make listener
+# 4. 進容器執行節點（每秒發佈一則 std_msgs/String 到 /chatter）
+make shell
+ros2 run syncai_driver_manager syncai_driver_manager
 ```
 
-`make listener` 應該會看到：
-
-```
-[INFO] [syncai_listener]: [#1] I heard: 'Hello from rclrs! #1'
-[INFO] [syncai_listener]: [#2] I heard: 'Hello from rclrs! #2'
-```
-
-也可以直接用 ROS 2 的 CLI 工具驗證，不必寫 subscriber：
+另開一個終端機，用 ROS 2 的 CLI 工具驗證：
 
 ```bash
 make topics                # 列出所有 topic
-make echo                  # ros2 topic echo /syncai/chatter
+make echo                  # ros2 topic echo /chatter
+```
+
+`make echo` 應該會看到：
+
+```
+data: 'hi #1'
+---
+data: 'hi #2'
+---
 ```
 
 ## 用 VS Code Dev Container 開發
@@ -61,7 +63,7 @@ make echo                  # ros2 topic echo /syncai/chatter
 1. 安裝 VS Code 的 [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) 擴充套件
 2. 用 VS Code 開啟這個 repo，執行 **Dev Containers: Reopen in Container**
 3. 第一次會 build image（跟 `make image` 是同一個 image），之後就秒開
-4. 在 VS Code 的終端機裡直接 `colcon build --symlink-install`、`ros2 run syncai_rust_demo talker`
+4. 在 VS Code 的終端機裡直接 `colcon build --symlink-install`、`ros2 run syncai_driver_manager syncai_driver_manager`
 
 設定在 `.devcontainer/`：
 
@@ -83,6 +85,9 @@ make echo                  # ros2 topic echo /syncai/chatter
 | 指令 | 作用 |
 | --- | --- |
 | `make shell` | 進到容器裡的 bash，環境都已 source 好 |
+| `make fmt` | 用 rustfmt 格式化所有 Rust 套件 |
+| `make fmt-check` | 只檢查格式、不改檔（CI 用） |
+| `make lint` | 用 clippy 檢查所有 Rust 套件（要先 `make build` 過一次） |
 | `make down` | 停止容器 |
 | `make clean` | 清掉 `build/` `install/` `log/` |
 | `make distclean` | 連 named volume（cargo cache、編譯產物）一起刪掉 |
@@ -96,13 +101,16 @@ make echo                  # ros2 topic echo /syncai/chatter
 │   └── entrypoint.sh       # 依序 source：ROS 2 → underlay → workspace
 ├── docker-compose.yml      # 掛載 src/、cargo 與 colcon 的 cache volume
 ├── Makefile                # 常用指令包裝
+├── rustfmt.toml / clippy.toml / .editorconfig  # 共用的格式與 lint 設定
+├── .devcontainer/          # VS Code Dev Container 設定
+├── docs/                   # 筆記
 └── src/
-    └── syncai_rust_demo/   # ROS 2 套件（build_type: ament_cargo）
+    └── syncai_driver_manager/  # ROS 2 套件（build_type: ament_cargo）
         ├── Cargo.toml
+        ├── Cargo.lock
         ├── package.xml
         └── src/
-            ├── talker.rs   # 每秒發佈一則 std_msgs/String
-            └── listener.rs # 訂閱並印出
+            └── main.rs     # 每秒發佈一則 std_msgs/String 到 /chatter
 ```
 
 ## 程式碼重點
@@ -168,7 +176,7 @@ ROS_DISTRO=jazzy make build
 
 ## 已知限制
 
-* 目前 talker / listener 都跑在同一個容器內。若之後要拆成多個容器，
+* 目前所有節點都跑在同一個容器內。若之後要拆成多個容器，
   它們必須共用同一個 Docker network，且 `ROS_DOMAIN_ID` 要一致。
 * 沒有 GUI（RViz / rqt）。要用的話得另外設定 X11 forwarding（macOS 需搭配 XQuartz）。
 
