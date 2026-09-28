@@ -1,10 +1,10 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>syncai_rust_demo</name>
+  <name>syncai_driver_manager</name>
   <version>0.1.0</version>
-  <description>用 rclrs 寫的最小 ROS 2 publisher / subscriber 範例</description>
-  <maintainer email="chungweeeei@gmail.com">andy_tseng</maintainer>
+  <description>My rclrs node</description>
+  <maintainer email="andy_tseng@syncrobotic.com">andy_tseng</maintainer>
   <license>Apache-2.0</license>
 
   <depend>rclrs</depend>

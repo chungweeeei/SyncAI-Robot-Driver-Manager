@@ -9,3 +9,6 @@ Cargo.lock
 .DS_Store
 .vscode/
 *.swp
+
+# colcon-ros-cargo 在 build 時自動產生（patch 到 underlay 的 rclrs / 訊息 crate）
+.cargo/
