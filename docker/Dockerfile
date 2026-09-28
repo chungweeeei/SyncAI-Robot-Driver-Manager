@@ -9,7 +9,7 @@
 #
 # 使用者自己的程式碼不放在 image 裡，而是以 volume 掛載到 /workspace。
 ARG ROS_DISTRO=humble
-FROM ros:${ROS_DISTRO}-ros-base
+FROM ros:humble-ros-base
 ARG ROS_DISTRO
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -101,6 +101,19 @@ RUN chmod +x /entrypoint.sh \
     && printf '. /opt/ros2_rust_setup.sh\n' >> /home/${USERNAME}/.bashrc
 
 USER ${USERNAME}
+
+# --- Claude Code（選用，Dev Container 會開啟）-------------------------------
+# 放在最後面，開關它不會讓前面編 underlay 的 layer 失效。
+# 設定與登入資訊放在 CLAUDE_CONFIG_DIR，Dev Container 會掛 named volume 保存；
+# 先建好目錄並設定擁有者，volume 才不會是 root 所有。
+ARG INSTALL_CLAUDE_CODE=false
+ENV CLAUDE_CONFIG_DIR=${HOME}/.claude
+ENV PATH=${HOME}/.local/bin:${PATH}
+RUN mkdir -p ${CLAUDE_CONFIG_DIR} \
+    && if [ "${INSTALL_CLAUDE_CODE}" = "true" ]; then \
+        curl -fsSL https://claude.ai/install.sh | bash; \
+    fi
+
 WORKDIR /workspace
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["/bin/bash"]

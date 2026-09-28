@@ -1,0 +1,66 @@
+// VS Code Dev Container：沿用 ../docker-compose.yml 的 image 與 volume，
+// 再疊上 docker-compose.devcontainer.yml 把整個 repo 掛進 /workspace。
+{
+  "name": "SyncAI ROS 2 + Rust",
+  "dockerComposeFile": ["../docker-compose.yml", "docker-compose.devcontainer.yml"],
+  "service": "ros2-rust",
+  "workspaceFolder": "/workspace",
+  "shutdownAction": "stopCompose",
+
+  // 容器與 VS Code server 都以 ros（uid/gid 1000）執行，不用 root
+  "containerUser": "ros",
+  "remoteUser": "ros",
+  // 不要依 host 使用者改 uid，固定 1000
+  "updateRemoteUserUID": false,
+
+  // 用 login shell 取得環境變數，rust-analyzer 等工具才看得到 source 過的 ROS 2 環境
+  "userEnvProbe": "loginInteractiveShell",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "vadimcn.vscode-lldb",
+        "tamasfe.even-better-toml",
+        "redhat.vscode-xml",
+        "ms-python.python",
+        "ms-vscode.cpptools",
+        "ranch-hand-robotics.rde-ros-2",
+        "anthropic.claude-code"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        // colcon 套件不在 repo 根目錄，rust-analyzer 要明確指定。新增套件時加在這裡
+        "rust-analyzer.linkedProjects": [
+          "src/syncai_driver_manager/Cargo.toml"
+        ],
+        // target/ 放進 named volume，避免在 macOS 的 bind mount 上編譯
+        "rust-analyzer.cargo.targetDir": "/workspace/build/.rust-analyzer",
+        "rust-analyzer.check.command": "clippy",
+
+        // 存檔自動 format：Rust 走 rust-analyzer（會讀 repo 根目錄的 rustfmt.toml）
+        "files.autoSave": "onFocusChange",
+        "[rust]": {
+          "editor.defaultFormatter": "rust-lang.rust-analyzer",
+          "editor.formatOnSave": true
+        },
+        "[toml]": {
+          "editor.defaultFormatter": "tamasfe.even-better-toml",
+          "editor.formatOnSave": true
+        },
+        "[xml]": {
+          "editor.defaultFormatter": "redhat.vscode-xml",
+          "editor.formatOnSave": true
+        },
+        "files.insertFinalNewline": true,
+        "files.trimTrailingWhitespace": true,
+        "files.watcherExclude": {
+          "**/build/**": true,
+          "**/install/**": true,
+          "**/log/**": true,
+          "**/target/**": true
+        }
+      }
+    }
+  }
+}
