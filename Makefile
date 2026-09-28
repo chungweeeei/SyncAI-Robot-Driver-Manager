@@ -3,8 +3,6 @@
 #   make image     建立 Docker image（第一次要跑，約 10-20 分鐘）
 #   make up        啟動容器
 #   make build     在容器內用 colcon 編譯 workspace
-#   make talker    執行 publisher
-#   make listener  執行 subscriber
 #   make fmt       用 rustfmt 格式化所有 Rust 套件
 #   make fmt-check 只檢查格式、不改檔（CI 用）
 #   make lint      用 clippy 檢查所有 Rust 套件（要先 make build 過一次）
@@ -16,7 +14,7 @@ COMPOSE := docker compose
 SERVICE := ros2-rust
 EXEC    := $(COMPOSE) exec $(SERVICE)
 
-.PHONY: image up down shell build fmt fmt-check lint talker listener echo topics clean distclean
+.PHONY: image up down shell build fmt fmt-check lint echo topics clean distclean
 
 image:
 	$(COMPOSE) build
@@ -45,12 +43,6 @@ fmt-check: up
 # 靠 colcon build 產生的 .cargo/config.toml 把 rclrs / 訊息 crate 指到 underlay
 lint: up
 	$(EXEC) bash -lc "$(MANIFESTS) | xargs -r -n1 cargo clippy --target-dir build/.clippy --all-targets --manifest-path"
-
-talker: up
-	$(EXEC) bash -lc "ros2 run syncai_rust_demo talker"
-
-listener: up
-	$(EXEC) bash -lc "ros2 run syncai_rust_demo listener"
 
 echo: up
 	$(EXEC) bash -lc "ros2 topic echo /syncai/chatter"
