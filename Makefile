@@ -45,7 +45,7 @@ lint: up
 	$(EXEC) bash -lc "$(MANIFESTS) | xargs -r -n1 cargo clippy --target-dir build/.clippy --all-targets --manifest-path"
 
 echo: up
-	$(EXEC) bash -lc "ros2 topic echo /syncai/chatter"
+	$(EXEC) bash -lc "ros2 topic echo /chatter"
 
 topics: up
 	$(EXEC) bash -lc "ros2 topic list"
