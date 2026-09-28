@@ -5,6 +5,9 @@
 #   make build     在容器內用 colcon 編譯 workspace
 #   make talker    執行 publisher
 #   make listener  執行 subscriber
+#   make fmt       用 rustfmt 格式化所有 Rust 套件
+#   make fmt-check 只檢查格式、不改檔（CI 用）
+#   make lint      用 clippy 檢查所有 Rust 套件（要先 make build 過一次）
 #   make shell     進入容器的互動式 shell
 #   make down      停止並移除容器
 #   make clean     清掉編譯產物
@@ -13,7 +16,7 @@ COMPOSE := docker compose
 SERVICE := ros2-rust
 EXEC    := $(COMPOSE) exec $(SERVICE)
 
-.PHONY: image up down shell build talker listener echo topics clean distclean
+.PHONY: image up down shell build fmt fmt-check lint talker listener echo topics clean distclean
 
 image:
 	$(COMPOSE) build
@@ -29,6 +32,19 @@ shell: up
 
 build: up
 	$(EXEC) bash -lc "colcon build --symlink-install"
+
+# src/ 底下每個 Cargo 套件（colcon 套件不在同一個 cargo workspace，要逐一跑）
+MANIFESTS := find src -name Cargo.toml -not -path '*/target/*'
+
+fmt: up
+	$(EXEC) bash -lc "$(MANIFESTS) | xargs -r -n1 cargo fmt --manifest-path"
+
+fmt-check: up
+	$(EXEC) bash -lc "$(MANIFESTS) | xargs -r -n1 cargo fmt --check --manifest-path"
+
+# 靠 colcon build 產生的 .cargo/config.toml 把 rclrs / 訊息 crate 指到 underlay
+lint: up
+	$(EXEC) bash -lc "$(MANIFESTS) | xargs -r -n1 cargo clippy --target-dir build/.clippy --all-targets --manifest-path"
 
 talker: up
 	$(EXEC) bash -lc "ros2 run syncai_rust_demo talker"
