@@ -54,6 +54,30 @@ make topics                # 列出所有 topic
 make echo                  # ros2 topic echo /syncai/chatter
 ```
 
+## 用 VS Code Dev Container 開發
+
+除了 `make`，也可以直接讓 VS Code 進到容器裡開發，rust-analyzer、除錯器等都在容器內跑。
+
+1. 安裝 VS Code 的 [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) 擴充套件
+2. 用 VS Code 開啟這個 repo，執行 **Dev Containers: Reopen in Container**
+3. 第一次會 build image（跟 `make image` 是同一個 image），之後就秒開
+4. 在 VS Code 的終端機裡直接 `colcon build --symlink-install`、`ros2 run syncai_rust_demo talker`
+
+設定在 `.devcontainer/`：
+
+| 檔案 | 作用 |
+| --- | --- |
+| `devcontainer.json` | 指定 compose service、VS Code 擴充套件與設定 |
+| `docker-compose.devcontainer.yml` | 疊在根目錄的 `docker-compose.yml` 上，把**整個 repo** 掛到 `/workspace`，並固定以 `ros`（uid/gid 1000）執行 |
+
+幾點注意：
+
+* Dev Container 的容器名稱是 `syncai-ros2-rust-devcontainer`，跟 `make up` 的容器分開，
+  但共用同一個 image 與 named volume（編譯產物、cargo cache）。
+* rust-analyzer 要先 `colcon build` 過一次才會正常：訊息套件的 crate 是由 `colcon-ros-cargo`
+  在 build 時接上的。
+* 新增 Rust 套件後，要把它的 `Cargo.toml` 加進 `devcontainer.json` 的 `rust-analyzer.linkedProjects`。
+
 ## 其他指令
 
 | 指令 | 作用 |
