@@ -1,0 +1,22 @@
+[package]
+name = "syncai_driver_manager"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]                         # one [[bin]] per node; this is the name `ros2 run` uses
+name="driver_manager_node"
+path = "src/main.rs"
+
+[dependencies]
+rclrs="0.8"
+ros-env="0.2"
+
+# Install launch/ and params/ into share/syncai_driver_manager/ so the launch file finds them
+[package.metadata.ros]
+install_to_share = ["launch", "params"]
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
