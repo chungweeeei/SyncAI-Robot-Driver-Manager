@@ -3,6 +3,8 @@ FROM ros:humble-ros-base
 ARG ROS_DISTRO
 ENV DEBIAN_FRONTEND=noninteractive
 
+# rmw-cyclonedds-cpp: the RMW docker-compose.yml selects via RMW_IMPLEMENTATION; without it rcl
+# refuses to start (including cargo test binaries)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         clang \
@@ -17,6 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         vim \
         ros-${ROS_DISTRO}-example-interfaces \
         ros-${ROS_DISTRO}-test-msgs \
+        ros-${ROS_DISTRO}-rmw-cyclonedds-cpp \
     && rm -rf /var/lib/apt/lists/*
 
 
