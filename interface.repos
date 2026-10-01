@@ -1,0 +1,21 @@
+# syncai_common（SyncAI-Robot-Interface）：整個 syncai stack 共用的 msg / srv / action。
+# 跟 SyncAI-Robot-Backend、SyncAI-Robot-Workspace 一樣用 vcstool 拉進來，不用 submodule。
+#
+#   make interface          # 第一次拉進 src/syncai_common
+#   make interface-update   # 改了下面的 version 之後重新 checkout（--force，會蓋掉本機改動）
+#
+# 路徑是相對於 vcs import 的目標目錄，而下面的 key 已經帶了 `src/`，所以要在 workspace
+# 根目錄（容器內的 /workspace）執行，不要再多給一個 `src` 參數，否則會落到 src/src/。
+#
+# 用 HTTPS 不用 SSH：這個 repo 是 public，容器裡不必放金鑰，CI 也能直接拉
+# （backend / workspace 兩邊的 interface.repos 也都是這樣寫）。
+#
+# src/syncai_common/ 放在 .gitignore：它是另一個 git repo 的工作目錄，訊息要在那邊改、
+# 在那邊 commit，不要 commit 到這個 repo；下一次 --force import 會蓋掉沒 commit 的東西。
+#
+# 跟著 dev 走（那個 repo 的預設分支）：main 會落後 dev，之前就發生過 import 下來少一個 srv。
+repositories:
+  src/syncai_common:
+    type: git
+    url: https://github.com/chungweeeei/SyncAI-Robot-Interface.git
+    version: dev

@@ -32,10 +32,13 @@ make image
 # 2. 啟動容器
 make up
 
-# 3. 編譯 workspace
+# 3. 拉共用訊息套件 syncai_common 進 src/（見「共用訊息套件」一節）
+make interface
+
+# 4. 編譯 workspace
 make build
 
-# 4. 進容器執行節點（每秒發佈一則 std_msgs/String 到 /chatter）
+# 5. 進容器執行節點（每秒發佈一則 std_msgs/String 到 /chatter）
 make shell
 ros2 run syncai_driver_manager syncai_driver_manager
 ```
@@ -85,6 +88,8 @@ data: 'hi #2'
 | 指令 | 作用 |
 | --- | --- |
 | `make shell` | 進到容器裡的 bash，環境都已 source 好 |
+| `make interface` | `vcs import < interface.repos`，把 `syncai_common` 拉進 `src/` |
+| `make interface-update` | 同上但加 `--force`，改了 `interface.repos` 的 pin 之後用 |
 | `make fmt` | 用 rustfmt 格式化所有 Rust 套件 |
 | `make fmt-check` | 只檢查格式、不改檔（CI 用） |
 | `make lint` | 用 clippy 檢查所有 Rust 套件（要先 `make build` 過一次） |
@@ -100,11 +105,13 @@ data: 'hi #2'
 │   ├── Dockerfile          # ROS 2 + Rust + rclrs 相依環境
 │   └── entrypoint.sh       # 依序 source：ROS 2 → underlay → workspace
 ├── docker-compose.yml      # 掛載 src/、cargo 與 colcon 的 cache volume
+├── interface.repos         # vcstool 清單：共用訊息套件 syncai_common 從哪裡拉
 ├── Makefile                # 常用指令包裝
 ├── rustfmt.toml / clippy.toml / .editorconfig  # 共用的格式與 lint 設定
 ├── .devcontainer/          # VS Code Dev Container 設定
 ├── docs/                   # 筆記
 └── src/
+    ├── syncai_common/          # vcs import 拉下來的共用訊息套件（gitignore，不在這個 repo 裡）
     └── syncai_driver_manager/  # ROS 2 套件（build_type: ament_cargo）
         ├── Cargo.toml
         ├── Cargo.lock
@@ -124,6 +131,53 @@ data: 'hi #2'
 * **訊息型別來自 `ros-env`。** `use ros_env::std_msgs::msg::String;`
   ——訊息套件不寫在 `Cargo.toml` 的 `[dependencies]`，而是宣告在 `package.xml` 裡，
   由 `colcon-ros-cargo` 在編譯時接上。
+
+## 共用訊息套件 syncai_common
+
+`msg` / `srv` / `action` 不定義在這個 repo，而是放在
+[SyncAI-Robot-Interface](https://github.com/chungweeeei/SyncAI-Robot-Interface)
+（colcon 套件名 `syncai_common`），整個 syncai stack 共用一份。
+這裡跟 `SyncAI-Robot-Backend`、`SyncAI-Robot-Workspace` 一樣用
+[vcstool](https://github.com/dirk-thomas/vcstool) 把它拉進 `src/`，不用 git submodule：
+
+```bash
+make interface          # 第一次 clone 之後跑一次，會建立 src/syncai_common/
+make interface-update   # 改了 interface.repos 的 version、或想丟掉本機改動時用（--force）
+```
+
+幾個要知道的點：
+
+* **`vcstool` 在容器裡，host 不用裝。** image 已經有 `python3-vcstool`；
+  `docker-compose.yml` 只掛 `./src`，容器裡看不到 `interface.repos`，
+  所以 `make interface` 是把檔案從 stdin 餵給容器內的 `vcs import`。
+  寫進 `/workspace/src` 等於寫進 host 的 `./src`。
+* **`src/syncai_common/` 在 `.gitignore` 裡。** 它是另一個 git repo 的工作目錄：
+  訊息要改就在那個 checkout 裡改、在那邊 commit，不要 commit 回這個 repo。
+  下一次 `--force` import 會蓋掉沒 commit 的東西。
+* **pin 在 `dev` 分支**，跟 backend / workspace 一致（`main` 會落後 `dev`）。
+  要換版本就改 `interface.repos` 的 `version`，commit 那一行 diff。
+
+### 在節點裡用這些訊息
+
+`syncai_common` 是標準的 `rosidl` 套件，`make build` 時 underlay 的
+`rosidl_generator_rs` 會順便產出 Rust 綁定（`msg` / `srv` / `action` 都有）。
+用法跟 `std_msgs` 一樣——**不要寫進 `Cargo.toml`**，而是在套件的 `package.xml` 加：
+
+```xml
+<depend>syncai_common</depend>
+```
+
+然後在程式裡：
+
+```rust
+use ros_env::syncai_common::msg::RobotState;
+```
+
+機制是 `ros-env` 的 build script：它掃 `AMENT_PREFIX_PATH` 上每個
+`<prefix>/share/<套件>/rust/Cargo.toml`，把有 `[package.metadata.ros-env] include = true`
+的全部 `include!` 進 `ros_env` 這個 crate——`syncai_common` 產生出來的 crate 就有這個標記。
+而 colcon 編某個套件時給的 `AMENT_PREFIX_PATH` 只包含**那個套件宣告過的相依**，
+所以 `package.xml` 漏掉 `<depend>` 的話，`ros_env::syncai_common` 就不存在。
 
 ## 加新套件
 

@@ -11,3 +11,7 @@ target/
 
 # colcon-ros-cargo 在 build 時自動產生（patch 到 underlay 的 rclrs / 訊息 crate）
 .cargo/
+
+# `vcs import < interface.repos` 拉下來的共用訊息套件（SyncAI-Robot-Interface）。
+# 它是另一個 repo 的工作目錄，materialise 出來的、不 commit 進來。
+src/syncai_common/
