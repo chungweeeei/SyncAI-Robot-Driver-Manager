@@ -1,28 +1,23 @@
-use rclrs::*;
+mod command;
+mod parameters;
+mod protocol;
+mod publishers;
+mod service;
+mod session;
+mod subscriber;
+mod telemetry;
+
 use std::error::Error;
 use std::sync::Arc;
 
-mod command;
+use rclrs::*;
+
 use command::{CommandLink, SafetyLock};
-
-mod parameters;
 use parameters::{UdpConfig, VelocityScale};
-
-mod protocol;
-
-mod publishers;
 use publishers::Publishers;
-
-mod subscriber;
-use subscriber::{CmdVelContext, Subscribers};
-
-mod service;
 use service::{ServiceContext, Services};
-
-mod session;
 use session::UdpSession;
-
-mod telemetry;
+use subscriber::{CmdVelContext, Subscribers};
 use telemetry::TelemetryWorker;
 
 /// The boundary between ROS 2 and the gait controller: nothing below this node is ROS.
@@ -38,13 +33,15 @@ use telemetry::TelemetryWorker;
 /// | The four services | One shared Worker: serialized, but concurrent with cmd_vel    |
 /// | Telemetry receive | Its own std::thread, entirely outside the executor            |
 pub struct DriverManagerNode {
-    _node: Node,
-    _udp_config: UdpConfig,
-    _velocity_scale: Arc<VelocityScale>,
-    // Dropped first: stops and joins the telemetry thread before the sockets are closed
+    // Fields drop in declaration order. The telemetry thread goes first so it is joined (and
+    // its socket and publishers closed) before the workers and node handle are torn down.
     _telemetry: TelemetryWorker,
     _subscribers: Subscribers,
     _services: Services,
+    // Parameters are undeclared when their handles drop, so they are kept for the node's life
+    _velocity_scale: Arc<VelocityScale>,
+    _udp_config: UdpConfig,
+    _node: Node,
 }
 
 impl DriverManagerNode {
@@ -96,7 +93,7 @@ impl DriverManagerNode {
         )?;
 
         let telemetry = TelemetryWorker::spawn(
-            Arc::clone(&telemetry_session.socket),
+            telemetry_session,
             Publishers::create(&node)?,
             node.get_clock(),
             node.logger().clone(),
@@ -108,12 +105,12 @@ impl DriverManagerNode {
         );
 
         Ok(Self {
-            _node: node,
-            _udp_config: udp_config,
-            _velocity_scale: velocity_scale,
             _telemetry: telemetry,
             _subscribers: subscribers,
             _services: services,
+            _velocity_scale: velocity_scale,
+            _udp_config: udp_config,
+            _node: node,
         })
     }
 }

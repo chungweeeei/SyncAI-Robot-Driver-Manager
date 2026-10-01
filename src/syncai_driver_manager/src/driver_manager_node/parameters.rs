@@ -3,6 +3,8 @@ use std::error::Error;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
+use super::protocol::VelocityGains;
+
 /// Per-direction cmd_vel -> actual velocity correction gains.
 ///
 /// The gait controller tracks each direction differently (forward vs backward, ...), so each
@@ -45,6 +47,19 @@ impl VelocityScale {
             angular_right: scale("scale_turn_r")?,
         })
     }
+
+    /// Reads all six gains at once. Each read is atomic on its own, but the six together are
+    /// not: a concurrent `set_speed_scale` may land between two reads.
+    pub fn gains(&self) -> VelocityGains {
+        VelocityGains {
+            forward: self.forward.get(),
+            backward: self.backward.get(),
+            left: self.left.get(),
+            right: self.right.get(),
+            angular_left: self.angular_left.get(),
+            angular_right: self.angular_right.get(),
+        }
+    }
 }
 
 /// The UDP endpoints cannot change once the sockets are open, so they are read-only
@@ -79,22 +94,22 @@ impl UdpConfig {
             telemetry_recv_ip: ip(
                 "telemetry_recv_ip",
                 "0.0.0.0",
-                "local interface address to receive telemetry datagrams on",
+                "local interface address to receive telemetry on",
             )?,
             telemetry_recv_port: port(
                 "telemetry_recv_port",
                 50012,
-                "local port to receive telemetry datagrams on",
+                "local port to receive telemetry on",
             )?,
             command_target_ip: ip(
                 "command_target_ip",
                 "192.168.1.120",
-                "controller address to send command datagrams to",
+                "controller address to send command to",
             )?,
             command_target_port: port(
                 "command_target_port",
                 50051,
-                "controller port to send command datagrams to",
+                "controller port to send command to",
             )?,
         })
     }

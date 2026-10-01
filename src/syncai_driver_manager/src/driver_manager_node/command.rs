@@ -62,7 +62,10 @@ impl SafetyLock {
     /// Safe to call from the telemetry thread.
     // TODO: wire up the triggers. JOINT_TEMP thresholds from the reference implementation:
     //       >= 75 °C warn, >= 95 °C lie down, >= 115 °C ESTOP.
-    #[expect(dead_code, reason = "no safety trigger is wired yet")]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "no safety trigger is wired yet")
+    )]
     pub fn trigger(&self, reason: &str, command: &CommandLink, logger: &Logger) {
         if !self.engaged.swap(true, Ordering::AcqRel) {
             log_error!(logger, "[Safety] !!! SAFETY TRIGGERED: {reason} !!!");

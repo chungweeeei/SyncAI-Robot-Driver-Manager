@@ -141,3 +141,87 @@ fn set_speed_scale(
 
     SetSpeedScale_Response { success }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::net::UdpSocket;
+    use std::time::Duration;
+
+    use super::super::session::UdpSession;
+    use super::*;
+
+    /// A `CommandLink` connected to a loopback listener, plus the listener to read it from
+    fn loopback_link() -> (CommandLink, UdpSocket) {
+        let listener = UdpSocket::bind("127.0.0.1:0").unwrap();
+        listener
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let session = UdpSession::connect(listener.local_addr().unwrap()).unwrap();
+        (CommandLink::new(session, Logger::default()), listener)
+    }
+
+    fn recv(listener: &UdpSocket) -> String {
+        let mut buf = [0u8; 64];
+        let n = listener.recv(&mut buf).unwrap();
+        String::from_utf8_lossy(&buf[..n]).into_owned()
+    }
+
+    fn assert_nothing_received(listener: &UdpSocket) {
+        let mut buf = [0u8; 64];
+        assert!(listener.recv(&mut buf).is_err(), "unexpected datagram");
+    }
+
+    #[test]
+    fn motion_key_is_sent_when_unlocked() {
+        let (command, listener) = loopback_link();
+        let safety = SafetyLock::default();
+
+        let resp = set_motion_key(&command, &safety, "0");
+        assert!(resp.success);
+        assert_eq!(resp.message, "Motion key sent");
+        assert_eq!(recv(&listener), "MODE Z\n");
+
+        let resp = set_motion_key(&command, &safety, protocol::ESTOP_KEY);
+        assert!(resp.success);
+        assert_eq!(resp.message, "Emergency stop sent");
+        assert_eq!(recv(&listener), "ESTOP\n");
+    }
+
+    #[test]
+    fn unknown_motion_key_sends_nothing() {
+        let (command, listener) = loopback_link();
+        let safety = SafetyLock::default();
+
+        let resp = set_motion_key(&command, &safety, "9");
+        assert!(!resp.success);
+        assert_eq!(resp.message, "Unknown motion key '9'");
+        assert_nothing_received(&listener);
+    }
+
+    #[test]
+    fn safety_lock_lies_down_once_and_only_lets_estop_through() {
+        let (command, listener) = loopback_link();
+        let safety = SafetyLock::default();
+        let logger = Logger::default();
+
+        safety.trigger("test", &command, &logger);
+        safety.trigger("test again", &command, &logger);
+        assert!(safety.is_engaged());
+        assert_eq!(recv(&listener), protocol::LIE_DOWN_COMMAND);
+        assert_nothing_received(&listener);
+
+        let resp = set_motion_key(&command, &safety, "1");
+        assert!(!resp.success);
+        assert_eq!(resp.message, "LOCKED");
+        assert_nothing_received(&listener);
+
+        let resp = set_motion_key(&command, &safety, protocol::ESTOP_KEY);
+        assert!(resp.success);
+        assert_eq!(recv(&listener), "ESTOP\n");
+
+        assert!(safety.release());
+        assert!(!safety.release());
+        assert!(set_motion_key(&command, &safety, "1").success);
+        assert_eq!(recv(&listener), "MODE C\n");
+    }
+}

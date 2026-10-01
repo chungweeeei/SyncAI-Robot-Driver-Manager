@@ -72,6 +72,32 @@ pub fn axes_command(vx: f64, vy: f64, wz: f64) -> String {
     format!("AXES {vx:.6} {vy:.6} {wz:.6}\n")
 }
 
+/// Per-direction cmd_vel -> AXES correction gains, a plain snapshot of the `VelocityScale`
+/// parameters
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VelocityGains {
+    pub forward: f64,
+    pub backward: f64,
+    pub left: f64,
+    pub right: f64,
+    pub angular_left: f64,
+    pub angular_right: f64,
+}
+
+/// Scales a planar command `[vx, vy, wz]` by the gain for each component's direction, picked by
+/// sign (zero counts as positive). Returns `(vx, vy, wz)` ready for `axes_command`.
+// The reference implementation's comment says the controller's turn sign is opposite to
+// REP 103 and must be negated, but its code does not negate.
+// This follows the code (no negation); trust neither until verified on hardware.
+pub fn scale_velocity([vx, vy, wz]: [f64; 3], gains: &VelocityGains) -> (f64, f64, f64) {
+    let pick = |v: f64, pos: f64, neg: f64| if v >= 0.0 { v * pos } else { v * neg };
+    (
+        pick(vx, gains.forward, gains.backward),
+        pick(vy, gains.left, gains.right),
+        pick(wz, gains.angular_left, gains.angular_right),
+    )
+}
+
 /// `set_policy_mode`: MODE followed by a **number** (the RL policy index)
 pub fn policy_mode_command(mode: u8) -> String {
     format!("MODE {mode}\n")
@@ -434,6 +460,27 @@ mod tests {
         for (a, b) in q.iter().zip([h, 0.0, 0.0, h]) {
             assert!((a - b).abs() < 1e-6, "{q:?}");
         }
+    }
+
+    #[test]
+    fn scale_velocity_picks_gain_by_sign() {
+        let gains = VelocityGains {
+            forward: 1.0,
+            backward: 2.0,
+            left: 3.0,
+            right: 4.0,
+            angular_left: 5.0,
+            angular_right: 6.0,
+        };
+        assert_eq!(scale_velocity([1.0, 1.0, 1.0], &gains), (1.0, 3.0, 5.0));
+        assert_eq!(
+            scale_velocity([-1.0, -1.0, -1.0], &gains),
+            (-2.0, -4.0, -6.0)
+        );
+        // Zero is "positive": no sign flip and no NaN
+        assert_eq!(scale_velocity([0.0; 3], &gains), (0.0, 0.0, 0.0));
+        // Each axis picks independently
+        assert_eq!(scale_velocity([0.5, -0.5, 2.0], &gains), (0.5, -2.0, 10.0));
     }
 
     #[test]

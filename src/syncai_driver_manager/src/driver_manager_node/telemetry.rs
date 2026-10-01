@@ -13,11 +13,14 @@ use ros_env::syncai_common::msg::{IMUState, MotorState, MotorStates};
 
 use super::protocol::{self, Battery, JOINT_NAMES, NUM_DOF, Sections, Telemetry};
 use super::publishers::Publishers;
+use super::session::UdpSession;
 
 // Sleeps in the kernel's recv while idle, but wakes every 100 ms to check `running`
 const RECV_TIMEOUT: Duration = Duration::from_millis(100);
 const LOG_THROTTLE: Duration = Duration::from_secs(1);
 
+/// Handle to the telemetry receive thread. The thread owns the telemetry socket and the
+/// publishers; dropping the handle stops the thread and joins it, which also closes the socket.
 pub struct TelemetryWorker {
     running: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
@@ -25,12 +28,12 @@ pub struct TelemetryWorker {
 
 impl TelemetryWorker {
     pub fn spawn(
-        socket: Arc<UdpSocket>,
+        session: UdpSession,
         publishers: Publishers,
         clock: Clock,
         logger: Logger,
     ) -> io::Result<Self> {
-        socket.set_read_timeout(Some(RECV_TIMEOUT))?;
+        session.socket.set_read_timeout(Some(RECV_TIMEOUT))?;
 
         let running = Arc::new(AtomicBool::new(true));
         let handle = thread::Builder::new().name("telemetry".into()).spawn({
@@ -40,7 +43,7 @@ impl TelemetryWorker {
                 clock,
                 logger,
             };
-            move || telemetry.run(&socket, &running)
+            move || telemetry.run(&session.socket, &running)
         })?;
 
         Ok(Self {
@@ -182,8 +185,14 @@ impl TelemetryLoop {
                     // Telemetry has no acceleration section; left at 0
                     ddq: 0.0,
                     tau_est: pick(s.joint_tau, i),
+                    // f32 -> i8 `as` truncates toward zero and saturates at i8::MIN / MAX
+                    // (never UB, unlike the C++ static_cast); the message field is i8
                     temperature: pick(s.joint_temp, i) as i8,
-                    error: s.joint_err.map_or(0, |v| v[i] as u16),
+                    // Out-of-range codes saturate to u16::MAX instead of wrapping into a
+                    // small code that could look valid
+                    error: s
+                        .joint_err
+                        .map_or(0, |v| u16::try_from(v[i]).unwrap_or(u16::MAX)),
                 })
                 .collect();
             let msg = MotorStates {

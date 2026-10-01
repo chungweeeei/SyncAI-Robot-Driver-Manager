@@ -1,6 +1,7 @@
+mod driver_manager_node;
+
 use rclrs::*;
 
-mod driver_manager_node;
 use driver_manager_node::DriverManagerNode;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

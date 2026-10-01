@@ -1,12 +1,13 @@
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
-use std::sync::Arc;
 
+/// One UDP socket and the addresses it was opened with. Owned by exactly one user (the
+/// telemetry thread or the `CommandLink`), so no sharing is needed.
 pub struct UdpSession {
     pub local_addr: SocketAddr,
     /// The peer address for `connect`; None for `listen`
     pub peer_addr: Option<SocketAddr>,
-    pub socket: Arc<UdpSocket>,
+    pub socket: UdpSocket,
 }
 
 impl UdpSession {
@@ -15,7 +16,7 @@ impl UdpSession {
         Ok(Self {
             local_addr: socket.local_addr()?,
             peer_addr: None,
-            socket: Arc::new(socket),
+            socket,
         })
     }
 
@@ -25,7 +26,7 @@ impl UdpSession {
         Ok(Self {
             local_addr: socket.local_addr()?,
             peer_addr: Some(addr),
-            socket: Arc::new(socket),
+            socket,
         })
     }
 }
