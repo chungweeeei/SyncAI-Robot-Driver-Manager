@@ -1,11 +1,47 @@
-// VS Code Dev Container: reuses the image and volumes of ../docker-compose.yml,
-// and layers docker-compose.devcontainer.yml on top to mount the whole repo at /workspace.
+// VS Code Dev Container for developing this package on its own. In production the package is
+// vcs-imported into SyncAI-Robot-Workspace, which has its own image; nothing here is used there.
+//
+// The container builds a colcon workspace around the repo: /workspace is a named volume (build/
+// install/ log/ and the vcs-imported src/syncai_common), and the repo is bind-mounted at
+// /workspace/src/syncai_driver_manager, the same path it has in SyncAI-Robot-Workspace.
 {
   "name": "SyncAI ROS 2 + Rust",
-  "dockerComposeFile": ["../docker-compose.yml", "docker-compose.devcontainer.yml"],
-  "service": "ros2-rust",
-  "workspaceFolder": "/workspace",
-  "shutdownAction": "stopCompose",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "args": {
+      "ROS_DISTRO": "humble",
+      // Always the ros user with uid/gid 1000, regardless of the host user
+      "USER_UID": "1000",
+      "USER_GID": "1000",
+      // Also install Claude Code inside the Dev Container
+      "INSTALL_CLAUDE_CODE": "true"
+    }
+  },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace/src/syncai_driver_manager,type=bind,consistency=cached",
+  "workspaceFolder": "/workspace/src/syncai_driver_manager",
+  "mounts": [
+    "source=syncai-ros2-rust_workspace,target=/workspace,type=volume",
+    "source=syncai-ros2-rust_cargo-registry,target=/home/ros/.cargo/registry,type=volume",
+    "source=syncai-ros2-rust_cargo-git,target=/home/ros/.cargo/git,type=volume",
+    // Claude Code settings and login, so rebuilding the container does not require logging in again
+    "source=syncai-ros2-rust_claude-config,target=/home/ros/.claude,type=volume"
+  ],
+  "runArgs": [
+    // Fixed name so `docker exec syncai-ros2-rust ...` works from the host
+    "--name=syncai-ros2-rust",
+    // tini as PID 1 so zombie processes left behind after Ctrl-C get reaped
+    "--init",
+    // Host network: the UDP controller link and DDS go over the physical NIC / lo, not the docker bridge
+    "--network=host"
+  ],
+  "containerEnv": {
+    // Change this to isolate from other ROS graphs on the same machine
+    "ROS_DOMAIN_ID": "2",
+    "RMW_IMPLEMENTATION": "rmw_cyclonedds_cpp"
+  },
+  // Pull the shared syncai_common messages next to this package (skipped if already there),
+  // then build once so rust-analyzer finds the generated message crates
+  "postCreateCommand": "cd /workspace && vcs import --skip-existing < src/syncai_driver_manager/interface.repos && colcon build --symlink-install",
 
   // Both the container and the VS Code server run as ros (uid/gid 1000), not root
   "containerUser": "ros",
@@ -30,15 +66,11 @@
       ],
       "settings": {
         "terminal.integrated.defaultProfile.linux": "bash",
-        // colcon packages are not at the repo root, so list them for rust-analyzer. Add new packages here
-        "rust-analyzer.linkedProjects": [
-          "src/syncai_driver_manager/Cargo.toml"
-        ],
-        // Keep target/ in a named volume to avoid compiling on a macOS bind mount
+        // Keep target/ in the workspace volume to avoid compiling on a macOS bind mount
         "rust-analyzer.cargo.targetDir": "/workspace/build/.rust-analyzer",
         "rust-analyzer.check.command": "clippy",
 
-        // Format on save: Rust goes through rust-analyzer (which reads the repo-root rustfmt.toml)
+        // Format on save: Rust goes through rust-analyzer (which reads rustfmt.toml next to Cargo.toml)
         "files.autoSave": "onFocusChange",
         "[rust]": {
           "editor.defaultFormatter": "rust-lang.rust-analyzer",

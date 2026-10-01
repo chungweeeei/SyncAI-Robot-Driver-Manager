@@ -3,7 +3,7 @@ FROM ros:humble-ros-base
 ARG ROS_DISTRO
 ENV DEBIAN_FRONTEND=noninteractive
 
-# rmw-cyclonedds-cpp: the RMW docker-compose.yml selects via RMW_IMPLEMENTATION; without it rcl
+# rmw-cyclonedds-cpp: the RMW devcontainer.json selects via RMW_IMPLEMENTATION; without it rcl
 # refuses to start (including cargo test binaries)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
@@ -43,7 +43,10 @@ RUN groupadd --gid ${USER_GID} ${USERNAME} \
     && chmod 0440 /etc/sudoers.d/${USERNAME}
 
 ENV ROS2_RUST_UNDERLAY=/opt/ros2_rust_underlay
-RUN mkdir -p /workspace/src /workspace/build /workspace/install /workspace/log \
+# The repo is bind-mounted at /workspace/src/syncai_driver_manager on top of a named volume at
+# /workspace. Create the mount point here so the volume is seeded with ros-owned directories;
+# otherwise Docker creates src/ as root and `vcs import` cannot write src/syncai_common.
+RUN mkdir -p /workspace/src/syncai_driver_manager /workspace/build /workspace/install /workspace/log \
              /home/${USERNAME}/.cargo/registry /home/${USERNAME}/.cargo/git \
              ${ROS2_RUST_UNDERLAY} \
     && chown -R ${USER_UID}:${USER_GID} /workspace /home/${USERNAME} ${ROS2_RUST_UNDERLAY}
@@ -71,8 +74,8 @@ RUN . /opt/ros/${ROS_DISTRO}/setup.sh \
     && rm -rf ${ROS2_RUST_UNDERLAY}/build ${ROS2_RUST_UNDERLAY}/log
 
 USER root
-COPY docker/setup_env.sh /opt/ros2_rust_setup.sh
-COPY docker/entrypoint.sh /entrypoint.sh
+COPY setup_env.sh /opt/ros2_rust_setup.sh
+COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh \
     && printf '. /opt/ros2_rust_setup.sh\n' > /etc/profile.d/10-ros2-rust.sh \
     && printf '. /opt/ros2_rust_setup.sh\n' >> /home/${USERNAME}/.bashrc
