@@ -38,26 +38,30 @@ make interface
 # 4. 編譯 workspace
 make build
 
-# 5. 進容器執行節點（每秒發佈一則 std_msgs/String 到 /chatter）
+# 5. 進容器執行節點（namespace 從 config/system.ini 的 robot_id 來，找不到時用 default_robot）
 make shell
-ros2 run syncai_driver_manager syncai_driver_manager
+ros2 launch syncai_driver_manager driver_manager.launch.py
+```
+
+`params/driver_manager_params.yaml` 的預設值是實機的位址（收 `192.168.1.103:50010`、送
+`192.168.1.120:50051`），本機沒有那張網卡時 bind 會失敗、節點直接結束。不接實機時改用
+loopback：
+
+```bash
+ros2 run syncai_driver_manager driver_manager_node --ros-args -r __ns:=/default_robot \
+    -p telemetry_recv_ip:=127.0.0.1 -p command_target_ip:=127.0.0.1
 ```
 
 另開一個終端機，用 ROS 2 的 CLI 工具驗證：
 
 ```bash
 make topics                # 列出所有 topic
-make echo                  # ros2 topic echo /chatter
+ros2 service call /default_robot/set_motion_key syncai_common/srv/SetMotionKey "{key: '0'}"
+ros2 topic echo /default_robot/battery_state
 ```
 
-`make echo` 應該會看到：
-
-```
-data: 'hi #1'
----
-data: 'hi #2'
----
-```
+節點的介面（topic / service / 參數 / UDP 封包格式）跟 SyncAI-Robot-Workspace 裡 C++ 版的
+`syncai_driver_manager` 相同，詳細說明見那邊的 README。
 
 ## 用 VS Code Dev Container 開發
 
@@ -66,7 +70,7 @@ data: 'hi #2'
 1. 安裝 VS Code 的 [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) 擴充套件
 2. 用 VS Code 開啟這個 repo，執行 **Dev Containers: Reopen in Container**
 3. 第一次會 build image（跟 `make image` 是同一個 image），之後就秒開
-4. 在 VS Code 的終端機裡直接 `colcon build --symlink-install`、`ros2 run syncai_driver_manager syncai_driver_manager`
+4. 在 VS Code 的終端機裡直接 `colcon build --symlink-install`、`ros2 launch syncai_driver_manager driver_manager.launch.py`
 
 設定在 `.devcontainer/`：
 
@@ -116,8 +120,20 @@ data: 'hi #2'
         ├── Cargo.toml
         ├── Cargo.lock
         ├── package.xml
+        ├── launch/driver_manager.launch.py   # 從 system.ini 讀 robot_id 當 namespace
+        ├── params/driver_manager_params.yaml # UDP 位址與速度修正增益
         └── src/
-            └── main.rs     # 每秒發佈一則 std_msgs/String 到 /chatter
+            ├── main.rs
+            └── driver_manager_node/
+                ├── mod.rs          # 組裝：參數 → socket → pub/sub/service → telemetry thread
+                ├── parameters.rs   # 速度增益（可動態改）、UDP 位址（read-only）
+                ├── protocol.rs     # 封包 <-> 資料結構的純函式，cargo test 不用 ROS
+                ├── session.rs      # UDP socket
+                ├── command.rs      # 送指令到下位機、safety lock
+                ├── telemetry.rs    # 收 telemetry、轉成 ROS 訊息發佈
+                ├── publishers.rs   # imu / motor_states / battery_state / mode
+                ├── subscriber.rs   # cmd_vel -> AXES
+                └── service.rs      # set_motion_key / set_policy_mode / set_speed_scale / reset_safety
 ```
 
 ## 程式碼重點

@@ -11,8 +11,12 @@
   <depend>rosidl_runtime_rs</depend>
   <depend>syncai_common</depend>
   <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
 
   <export>
     <build_type>ament_cargo</build_type>

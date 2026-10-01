@@ -4,12 +4,16 @@ version = "0.1.0"
 edition = "2024"
 
 [[bin]]                         # 一個 node 對應一個 [[bin]]，ros2 run 用的就是這個名字
-name="syncai_driver_manager"
+name="driver_manager_node"
 path = "src/main.rs"
 
 [dependencies]
 rclrs="0.8"
 ros-env="0.2"
+
+# 讓 launch/ 與 params/ 跟著裝到 share/syncai_driver_manager/，launch file 才找得到
+[package.metadata.ros]
+install_to_share = ["launch", "params"]
 
 [lints.rust]
 unsafe_code = "forbid"
