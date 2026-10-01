@@ -6,7 +6,6 @@ services:
       dockerfile: docker/Dockerfile
       args:
         ROS_DISTRO: ${ROS_DISTRO:-humble}
-        # host 端使用者不是 1000 的話（Linux 上常見），用 USER_UID=$(id -u) 覆蓋
         USER_UID: ${USER_UID:-1000}
         USER_GID: ${USER_GID:-1000}
     container_name: syncai-ros2-rust
@@ -17,23 +16,19 @@ services:
     stdin_open: true
     tty: true
     working_dir: /workspace
+    # 直接用 host 的網路：UDP 控制器跟 DDS 都走實體網卡 / lo，不經過 docker bridge
+    network_mode: host
     environment:
       # 同一台機器上要跟別人的 ROS 網路隔離時，改這個編號
-      ROS_DOMAIN_ID: "42"
-      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+      ROS_DOMAIN_ID: "2"
+      RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
     volumes:
-      # 專案原始碼直接掛進去，在 host 編輯、容器內編譯
-      - ./src:/workspace/src
-      # 編譯產物放 named volume，避免拖慢 macOS 的檔案掛載，也不會弄髒 repo
-      - colcon-build:/workspace/build
-      - colcon-install:/workspace/install
-      - colcon-log:/workspace/log
+      # 開發階段：整個 repo 掛進去，build/ install/ log/ 直接寫回 host（已 gitignore），
+      # 方便把 install/ 拿去其他 workspace 試跑
+      - .:/workspace
       - cargo-registry:/home/ros/.cargo/registry
       - cargo-git:/home/ros/.cargo/git
 
 volumes:
-  colcon-build:
-  colcon-install:
-  colcon-log:
   cargo-registry:
   cargo-git:

@@ -21,20 +21,14 @@ services:
     user: "1000:1000"
     container_name: syncai-ros2-rust-devcontainer
     volumes:
-      # 整個 repo 掛到 /workspace，編輯器才看得到 README、Makefile 等檔案。
-      # build/ install/ log/ 仍然被 named volume 蓋掉，不會寫回 host。
+      # 整個 repo 掛到 /workspace（跟 docker-compose.yml 同一個掛載點，這裡只多加 :cached），
+      # build/ install/ log/ 會寫回 host 的 repo 目錄
       - .:/workspace:cached
       # Claude Code 的設定與登入資訊，容器重建後不用重新登入
       - claude-config:/home/ros/.claude
 
-# 沿用 `make up` 那組 volume，編譯產物與 cargo cache 兩邊共用
+# 沿用 `make up` 那組 cargo cache volume；編譯產物在 repo 目錄裡，兩邊本來就共用
 volumes:
-  colcon-build:
-    name: syncai-ros2-rust_colcon-build
-  colcon-install:
-    name: syncai-ros2-rust_colcon-install
-  colcon-log:
-    name: syncai-ros2-rust_colcon-log
   cargo-registry:
     name: syncai-ros2-rust_cargo-registry
   cargo-git:

@@ -30,8 +30,8 @@ shell: up
 	$(EXEC) bash
 
 # 共用訊息套件 syncai_common（SyncAI-Robot-Interface），見 interface.repos。
-# 用容器內的 vcstool，host 不用另外裝；docker-compose 只掛了 ./src，容器裡看不到
-# interface.repos，所以用 stdin 餵進去（exec -T 才不會配 TTY，管線才成立）。
+# 用容器內的 vcstool，host 不用另外裝。interface.repos 用 stdin 餵進去，這樣不管容器掛了
+# 哪些目錄都能用（exec -T 才不會配 TTY，管線才成立）。
 # 寫進 /workspace/src 等於寫進 host 的 ./src，import 完直接 make build 就會一起編。
 interface: up
 	$(COMPOSE) exec -T $(SERVICE) bash -lc "cd /workspace && vcs import" < interface.repos
@@ -62,7 +62,7 @@ echo: up
 topics: up
 	$(EXEC) bash -lc "ros2 topic list"
 
-# build/install/log 是掛載進來的 volume，目錄本身刪不掉，只能清內容
+# build/install/log 在 repo 目錄裡（掛載進容器），用容器內的 ros 使用者清，避免權限問題
 clean: up
 	$(EXEC) bash -lc "find /workspace/build /workspace/install /workspace/log -mindepth 1 -delete"
 

@@ -78,7 +78,7 @@ data: 'hi #2'
 幾點注意：
 
 * Dev Container 的容器名稱是 `syncai-ros2-rust-devcontainer`，跟 `make up` 的容器分開，
-  但共用同一個 image 與 named volume（編譯產物、cargo cache）。
+  但共用同一個 image、repo 目錄（編譯產物）與 cargo cache volume。
 * rust-analyzer 要先 `colcon build` 過一次才會正常：訊息套件的 crate 是由 `colcon-ros-cargo`
   在 build 時接上的。
 * 新增 Rust 套件後，要把它的 `Cargo.toml` 加進 `devcontainer.json` 的 `rust-analyzer.linkedProjects`。
@@ -95,7 +95,7 @@ data: 'hi #2'
 | `make lint` | 用 clippy 檢查所有 Rust 套件（要先 `make build` 過一次） |
 | `make down` | 停止容器 |
 | `make clean` | 清掉 `build/` `install/` `log/` |
-| `make distclean` | 連 named volume（cargo cache、編譯產物）一起刪掉 |
+| `make distclean` | 停止容器並刪掉 cargo cache 的 named volume |
 
 ## 專案結構
 
@@ -104,7 +104,7 @@ data: 'hi #2'
 ├── docker/
 │   ├── Dockerfile          # ROS 2 + Rust + rclrs 相依環境
 │   └── entrypoint.sh       # 依序 source：ROS 2 → underlay → workspace
-├── docker-compose.yml      # 掛載 src/、cargo 與 colcon 的 cache volume
+├── docker-compose.yml      # 整個 repo 掛到 /workspace，cargo cache 用 named volume
 ├── interface.repos         # vcstool 清單：共用訊息套件 syncai_common 從哪裡拉
 ├── Makefile                # 常用指令包裝
 ├── rustfmt.toml / clippy.toml / .editorconfig  # 共用的格式與 lint 設定
@@ -148,8 +148,8 @@ make interface-update   # 改了 interface.repos 的 version、或想丟掉本�
 幾個要知道的點：
 
 * **`vcstool` 在容器裡，host 不用裝。** image 已經有 `python3-vcstool`；
-  `docker-compose.yml` 只掛 `./src`，容器裡看不到 `interface.repos`，
-  所以 `make interface` 是把檔案從 stdin 餵給容器內的 `vcs import`。
+  `make interface` 把 `interface.repos` 從 stdin 餵給容器內的 `vcs import`，
+  所以不依賴容器掛了哪些目錄。
   寫進 `/workspace/src` 等於寫進 host 的 `./src`。
 * **`src/syncai_common/` 在 `.gitignore` 裡。** 它是另一個 git repo 的工作目錄：
   訊息要改就在那個 checkout 裡改、在那邊 commit，不要 commit 回這個 repo。
