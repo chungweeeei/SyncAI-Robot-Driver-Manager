@@ -1,6 +1,6 @@
-# rustfmt 設定（只用 stable 選項，Rust 1.85 的 rustfmt 就能跑，不需要 nightly）
-# 所有 colcon 套件共用這份：rustfmt 會從檔案所在目錄往上找到 repo 根目錄的 rustfmt.toml。
-# edition 不寫在這裡，由各套件 Cargo.toml 的 edition 決定。
+# rustfmt configuration (stable options only, so the Rust 1.85 rustfmt works without nightly)
+# Shared by every colcon package: rustfmt searches upward from each file to the repo-root rustfmt.toml.
+# The edition is not set here; it comes from each package's Cargo.toml.
 max_width = 100
 newline_style = "Unix"
 use_field_init_shorthand = true

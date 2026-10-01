@@ -14,7 +14,7 @@ use ros_env::syncai_common::msg::{IMUState, MotorState, MotorStates};
 use super::protocol::{self, Battery, JOINT_NAMES, NUM_DOF, Sections, Telemetry};
 use super::publishers::Publishers;
 
-// 閒置時睡在 kernel 的 recv 裡，但每 100 ms 醒來一次檢查 running
+// Sleeps in the kernel's recv while idle, but wakes every 100 ms to check `running`
 const RECV_TIMEOUT: Duration = Duration::from_millis(100);
 const LOG_THROTTLE: Duration = Duration::from_secs(1);
 
@@ -67,13 +67,13 @@ struct TelemetryLoop {
 
 impl TelemetryLoop {
     fn run(&self, socket: &UdpSocket, running: &AtomicBool) {
-        // 一個 UDP datagram 最大 65507 bytes
+        // A UDP datagram is at most 65507 bytes
         let mut buf = vec![0u8; 65_507];
 
         while running.load(Ordering::Relaxed) {
             let (n, from) = match socket.recv_from(&mut buf) {
                 Ok(r) => r,
-                // 逾時：回去檢查 running
+                // Timed out: go back and check `running`
                 Err(e)
                     if matches!(
                         e.kind(),
@@ -93,7 +93,8 @@ impl TelemetryLoop {
                 }
             };
 
-            // 不管有沒有 section 解得出來，這行都是「UDP 連線還活著」最快的確認方式
+            // Whether or not any section parses, this line is the quickest proof that the UDP
+            // link is alive
             log_info!(
                 self.logger.throttle(LOG_THROTTLE),
                 "[Telemetry] Received {n} bytes from {from}"
@@ -124,7 +125,7 @@ impl TelemetryLoop {
             },
             voltage: battery.voltage,
             current: battery.current,
-            // BMS 回報 0–100，BatteryState.percentage 定義在 0–1
+            // The BMS reports 0-100; BatteryState.percentage is defined on 0-1
             percentage: battery.soc / 100.0,
             temperature: battery.temperature,
             charge: f32::NAN,
@@ -149,19 +150,21 @@ impl TelemetryLoop {
     }
 
     fn publish_sections(&self, s: &Sections) {
-        // TODO: 監看 JOINT_TEMP 過熱並觸發 safety shutdown（門檻見 SafetyLock::trigger）。
+        // TODO: monitor JOINT_TEMP for overheat and trigger a safety shutdown (thresholds in
+        //       SafetyLock::trigger).
 
         if s.has_imu() {
             let msg = IMUState {
                 timestamp: self.timestamp_ns(),
-                // telemetry 沒有四元數，從 RPY 推；沒有 IMU_RPY section 時用 identity
+                // Telemetry carries no quaternion, so derive it from RPY; identity when there
+                // is no IMU_RPY section
                 quaternion: s
                     .rpy
                     .map_or([1.0, 0.0, 0.0, 0.0], protocol::quaternion_from_rpy),
                 gyroscope: s.omega.unwrap_or_default(),
                 accelerometer: s.acc.unwrap_or_default(),
                 rpy: s.rpy.unwrap_or_default(),
-                // IMU 溫度不在 telemetry 裡，維持 0
+                // IMU temperature is not in the telemetry; left at 0
                 temperature: 0,
             };
             self.publish(&self.publishers.imu, msg, "imu");
@@ -176,7 +179,7 @@ impl TelemetryLoop {
                     name: (*name).into(),
                     q: pick(s.joint_pos, i),
                     dq: pick(s.joint_vel, i),
-                    // telemetry 沒有加速度 section，維持 0
+                    // Telemetry has no acceleration section; left at 0
                     ddq: 0.0,
                     tau_est: pick(s.joint_tau, i),
                     temperature: pick(s.joint_temp, i) as i8,
@@ -213,8 +216,8 @@ impl TelemetryLoop {
         }
     }
 
-    /// IMUState / MotorStates 的 timestamp 是 **nanoseconds**（RobotState 用秒、
-    /// ArtifactState 用毫秒，做跨訊息運算前先確認單位）
+    /// IMUState / MotorStates timestamps are **nanoseconds** (RobotState uses seconds and
+    /// ArtifactState milliseconds; check the unit before doing arithmetic across messages)
     fn timestamp_ns(&self) -> u64 {
         u64::try_from(self.clock.now().nsec).unwrap_or(0)
     }

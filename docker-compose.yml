@@ -9,22 +9,22 @@ services:
         USER_UID: ${USER_UID:-1000}
         USER_GID: ${USER_GID:-1000}
     container_name: syncai-ros2-rust
-    # 用 tini 當 PID 1，才會回收 Ctrl-C 之後留下的 zombie process
+    # Run tini as PID 1 so zombie processes left behind after Ctrl-C get reaped
     init: true
-    # 讓容器一直活著，之後用 `docker compose exec` 進去操作
+    # Keep the container alive; work in it with `docker compose exec`
     command: sleep infinity
     stdin_open: true
     tty: true
     working_dir: /workspace
-    # 直接用 host 的網路：UDP 控制器跟 DDS 都走實體網卡 / lo，不經過 docker bridge
+    # Use the host network directly: the UDP controller link and DDS go over the physical NIC / lo, not the docker bridge
     network_mode: host
     environment:
-      # 同一台機器上要跟別人的 ROS 網路隔離時，改這個編號
+      # Change this to isolate from other ROS graphs on the same machine
       ROS_DOMAIN_ID: "2"
       RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
     volumes:
-      # 開發階段：整個 repo 掛進去，build/ install/ log/ 直接寫回 host（已 gitignore），
-      # 方便把 install/ 拿去其他 workspace 試跑
+      # During development the whole repo is mounted, and build/ install/ log/ are written back to the host (gitignored),
+      # so install/ can be taken to another workspace to try out
       - .:/workspace
       - cargo-registry:/home/ros/.cargo/registry
       - cargo-git:/home/ros/.cargo/git

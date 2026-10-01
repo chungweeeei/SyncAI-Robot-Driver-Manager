@@ -8,10 +8,11 @@ use super::session::UdpSession;
 
 const LOG_THROTTLE: Duration = Duration::from_secs(1);
 
-/// 往下位機送 ASCII 指令。
+/// Sends ASCII commands to the gait controller.
 ///
-/// UDP 沒有 ack：`send` 成功只代表封包進了 kernel，不代表控制器收到；
-/// 掉了就是掉了，沒有重送，也沒有人會知道。
+/// UDP has no acknowledgement: a successful `send` only means the datagram reached the kernel,
+/// not that the controller received it. A dropped command is simply lost: nothing retries it
+/// and nothing notices.
 pub struct CommandLink {
     session: UdpSession,
     logger: Logger,
@@ -34,10 +35,13 @@ impl CommandLink {
     }
 }
 
-/// 鎖住時 `set_motion_key` 只放行 ESTOP，只有 `reset_safety` service 能解鎖。
+/// While engaged, `set_motion_key` only lets ESTOP through; only the `reset_safety` service
+/// releases it.
 ///
-/// 目前沒有任何東西會觸發它（電量 / JOINT_TEMP 過熱都還是 TODO），所以實際上永遠不會鎖。
-/// 另外，cmd_vel 與 set_policy_mode 都**不受**這把鎖限制，跟參考實作不同。
+/// Nothing triggers it yet (low battery and JOINT_TEMP overheat are both still TODO), so in
+/// practice it is never engaged.
+/// Also, unlike the reference implementation, cmd_vel and set_policy_mode are **not** gated
+/// by it.
 #[derive(Default)]
 pub struct SafetyLock {
     engaged: AtomicBool,
@@ -48,15 +52,16 @@ impl SafetyLock {
         self.engaged.load(Ordering::Acquire)
     }
 
-    /// 解鎖；回傳解鎖前是否鎖著
+    /// Releases the lock; returns whether it was engaged
     pub fn release(&self) -> bool {
         self.engaged.swap(false, Ordering::AcqRel)
     }
 
-    /// 上鎖並讓機器人趴下（MODE X）。用 swap 做 check-and-set，同時多個觸發也只會動作一次。
-    /// 可以從 telemetry thread 呼叫。
-    // TODO: 接上觸發條件。JOINT_TEMP 的門檻沿用參考實作：>= 75 °C 警告、>= 95 °C 趴下、
-    //       >= 115 °C ESTOP。
+    /// Engages the lock and lies the robot down (MODE X). The swap is an atomic check-and-set,
+    /// so concurrent triggers act exactly once.
+    /// Safe to call from the telemetry thread.
+    // TODO: wire up the triggers. JOINT_TEMP thresholds from the reference implementation:
+    //       >= 75 °C warn, >= 95 °C lie down, >= 115 °C ESTOP.
     #[expect(dead_code, reason = "no safety trigger is wired yet")]
     pub fn trigger(&self, reason: &str, command: &CommandLink, logger: &Logger) {
         if !self.engaged.swap(true, Ordering::AcqRel) {

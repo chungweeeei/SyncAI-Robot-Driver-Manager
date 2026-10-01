@@ -1,27 +1,30 @@
-//! 底層 UDP 封包 <-> 資料結構 的轉換。
+//! Conversion between low-level UDP packets and data structures.
 //!
-//! 這裡只放純函式：不碰 socket、不碰 Node、也不碰 ROS 訊息型別，所以可以直接
-//! `cargo test`，不需要 ROS 環境或實機。
+//! Pure functions only: no sockets, no Node and no ROS message types, so everything here can
+//! be tested with `cargo test` without a ROS environment or the real robot.
 //!
-//! 下位機（gait controller）兩個方向都是 ASCII：
+//! The gait controller speaks ASCII in both directions:
 //!
-//! * 指令（送出）：`AXES <vx> <vy> <wz>\n`、`MODE <char>\n`、`MODE <uint>\n`、`ESTOP\n`
-//! * telemetry（接收）：一個 datagram 一行，由空白分隔的 section 組成，每個 section 是
-//!   關鍵字加上數值，一直到下一個關鍵字為止；一個 datagram 可以只帶任意幾個 section：
+//! * Commands (out): `AXES <vx> <vy> <wz>\n`, `MODE <char>\n`, `MODE <uint>\n`, `ESTOP\n`
+//! * Telemetry (in): one line per datagram, made of whitespace-separated sections. Each section
+//!   is a keyword followed by its values, up to the next keyword; a datagram may carry any
+//!   subset of sections:
 //!
 //!   ```text
-//!   IMU_RPY r p y  ACC ax ay az  OMEGA wx wy wz  JOINT_POS q0 … q11  MODE_STATE pol mot
+//!   IMU_RPY r p y  ACC ax ay az  OMEGA wx wy wz  JOINT_POS q0 ... q11  MODE_STATE pol mot
 //!   ```
 //!
-//!   `BMS_V2` 是特例：它一定在行首，而且整個 datagram 只有它。
+//!   `BMS_V2` is the exception: it always starts the line and is alone in its datagram.
 
 use std::fmt;
 
-/// 每個 JOINT_* section 的數值個數（四足：4 腿 × 3 DOF）
+/// Number of values in each JOINT_* section (quadruped: 4 legs x 3 DOF)
 pub const NUM_DOF: usize = 12;
 
-/// JOINT_* section 內的數值順序，用 G23 URDF 的主動關節名稱（Ankle 是固定關節，不會回報）。
-// TODO: 確認跟控制器的關節順序一致；motor_states 的名稱是照位置硬配的。
+/// Value order within each JOINT_* section, using the G23 URDF's actuated joint names (the
+/// Ankle joints are fixed and not reported).
+// TODO: confirm this matches the controller's joint order; motor_states names are assigned
+//       positionally.
 pub const JOINT_NAMES: [&str; NUM_DOF] = [
     "FL_HipX_joint",
     "FL_HipY_joint",
@@ -37,7 +40,7 @@ pub const JOINT_NAMES: [&str; NUM_DOF] = [
     "HR_Knee_joint",
 ];
 
-/// 所有 section 關鍵字；用來判斷一個 section 的數值到哪裡結束
+/// All section keywords; used to find where a section's values end
 const KEYWORDS: [&str; 10] = [
     "BMS_V2",
     "IMU_RPY",
@@ -51,30 +54,33 @@ const KEYWORDS: [&str; 10] = [
     "MODE_STATE",
 ];
 
-/// BMS_V2 至少要有的數值個數（voltage current soc … temp1 temp2）
+/// Minimum number of BMS_V2 values (voltage current soc ... temp1 temp2)
 const BMS_MIN_VALUES: usize = 8;
 
-/// 讓控制器趴下；safety lock 觸發時送的指令
+/// Lies the robot down; sent when the safety lock is triggered
 pub const LIE_DOWN_COMMAND: &str = "MODE X\n";
 
-/// 急停的 motion key。它不是 MODE 字元，而且是 safety lock 鎖住時唯一放行的 key。
+/// The emergency-stop motion key. It is not a MODE character, and it is the only key let
+/// through while the safety lock is engaged.
 pub const ESTOP_KEY: &str = "4";
 
 // ---------------------------------------------------------------------------
-// 指令
+// Commands
 // ---------------------------------------------------------------------------
 
 pub fn axes_command(vx: f64, vy: f64, wz: f64) -> String {
     format!("AXES {vx:.6} {vy:.6} {wz:.6}\n")
 }
 
-/// `set_policy_mode`：MODE 後面接的是**數字**（RL policy index）
+/// `set_policy_mode`: MODE followed by a **number** (the RL policy index)
 pub fn policy_mode_command(mode: u8) -> String {
     format!("MODE {mode}\n")
 }
 
-/// `set_motion_key`：service 合約是數字字串 "0"–"5"，MODE 後面接的是**字元**。
-/// 跟 `policy_mode_command` 是同一個關鍵字的兩種指令，控制器靠參數分辨。
+/// `set_motion_key`: the service contract is a numeric string "0"-"5"; MODE is followed by a
+/// **character**.
+/// This and `policy_mode_command` are two commands on the same keyword; the controller tells
+/// them apart by the argument.
 pub fn motion_key_command(key: &str) -> Option<&'static str> {
     match key {
         "0" => Some("MODE Z\n"), // Stand
@@ -95,13 +101,13 @@ pub fn motion_key_command(key: &str) -> Option<&'static str> {
 pub struct Battery {
     pub voltage: f32,
     pub current: f32,
-    /// BMS 回報的 state-of-charge，0–100（不是 0–1）
+    /// State of charge as reported by the BMS, 0-100 (not 0-1)
     pub soc: f32,
-    /// 兩顆溫度感測器的平均
+    /// Mean of the two temperature sensors
     pub temperature: f32,
 }
 
-/// 一個非 BMS 的 datagram；沒出現或解不出來的 section 是 None
+/// A non-BMS datagram; sections that are absent or fail to parse are None
 #[derive(Debug, Default, PartialEq)]
 pub struct Sections {
     pub rpy: Option<[f32; 3]>,
@@ -117,14 +123,15 @@ pub struct Sections {
 }
 
 impl Sections {
-    /// 任一個 IMU section 在就發 IMUState，缺的欄位補 0
-    // TODO: 確認韌體是否一定把 IMU_RPY / ACC / OMEGA 放在同一個 datagram；
-    //       若會拆開，這裡會發出欄位歸零的 IMUState 而不是丟掉。
+    /// Publish IMUState if any IMU section is present; missing fields are zeroed
+    // TODO: confirm the firmware always packs IMU_RPY / ACC / OMEGA into one datagram;
+    //       if it splits them, this publishes IMUState with zeroed fields instead of
+    //       dropping it.
     pub fn has_imu(&self) -> bool {
         self.rpy.is_some() || self.acc.is_some() || self.omega.is_some()
     }
 
-    /// 任一個 JOINT_* section 在就發 MotorStates，缺的欄位補 0
+    /// Publish MotorStates if any JOINT_* section is present; missing fields are zeroed
     pub fn has_joints(&self) -> bool {
         self.joint_pos.is_some()
             || self.joint_vel.is_some()
@@ -134,7 +141,8 @@ impl Sections {
     }
 }
 
-// 每個 datagram 解完馬上就用掉、不會存起來，大小差距無所謂，不值得每包多一次 heap 配置
+// Each datagram is consumed right after parsing and never stored, so the size difference does
+// not matter and is not worth a heap allocation per packet
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, PartialEq)]
 pub enum Telemetry {
@@ -142,7 +150,7 @@ pub enum Telemetry {
     Sections(Sections),
 }
 
-/// 某個 section 被略過的原因；不影響同一個 datagram 裡的其他 section
+/// Why a section was skipped; other sections in the same datagram are unaffected
 #[derive(Debug, PartialEq)]
 pub enum ParseWarning {
     TooFewValues {
@@ -171,11 +179,12 @@ impl fmt::Display for ParseWarning {
     }
 }
 
-/// 解一個 telemetry datagram。
+/// Parses one telemetry datagram.
 ///
-/// 防禦式解析：數值不夠、或 token 不是有限數字的 section 會被略過並回報在 warnings，
-/// 而不是發出垃圾值；同一個 datagram 裡的其他 section 不受影響。
-/// 空的 datagram 回傳 `(None, [])`。
+/// Parsing is defensive: a section with too few values, or a token that is not a finite number,
+/// is skipped and reported in the warnings instead of producing garbage; other sections in the
+/// same datagram are unaffected.
+/// An empty datagram returns `(None, [])`.
 pub fn parse_telemetry(line: &str) -> (Option<Telemetry>, Vec<ParseWarning>) {
     let mut parser = SectionParser {
         tokens: line.split_whitespace().collect(),
@@ -201,8 +210,8 @@ pub fn parse_telemetry(line: &str) -> (Option<Telemetry>, Vec<ParseWarning>) {
     (telemetry, parser.warnings)
 }
 
-/// 由 RPY 推出四元數（ZYX，假設單位是 radian），順序為 **[w, x, y, z]**。
-// TODO: 確認 IMU_RPY 的單位是 radian 不是 degree；若是 degree，姿態會完全錯。
+/// Derives a quaternion from RPY (ZYX, radians assumed), ordered **[w, x, y, z]**.
+// TODO: confirm IMU_RPY is in radians, not degrees; if degrees, orientation is nonsense.
 pub fn quaternion_from_rpy([roll, pitch, yaw]: [f32; 3]) -> [f32; 4] {
     let (sr, cr) = (roll * 0.5).sin_cos();
     let (sp, cp) = (pitch * 0.5).sin_cos();
@@ -220,7 +229,8 @@ fn parse_f32(token: &str) -> Option<f32> {
 }
 
 fn parse_i32(token: &str) -> Option<i32> {
-    // 跟參考實作（strtol 後轉 int）一樣：超出 i64 才算錯，超出 i32 直接截斷
+    // Same as the reference implementation (strtol, then cast to int): only out of i64 range is
+    // an error; out of i32 range is truncated
     token.parse::<i64>().ok().map(|v| v as i32)
 }
 
@@ -230,8 +240,10 @@ struct SectionParser<'a> {
 }
 
 impl SectionParser<'_> {
-    /// 找到 `section` 關鍵字（第一次出現），取它後面直到下一個關鍵字的 N 個數值。
-    /// 數值比 N 多沒關係，少於 N 或任一個解不出來就整個 section 略過。
+    /// Finds the (first) `section` keyword and takes N values from what follows it, up to the
+    /// next keyword.
+    /// More than N values is fine; fewer than N, or any value failing to parse, skips the whole
+    /// section.
     fn values<T: Copy + Default, const N: usize>(
         &mut self,
         section: &'static str,
@@ -267,9 +279,10 @@ impl SectionParser<'_> {
         Some(out)
     }
 
-    // TODO: soc < 20% 時觸發 safety shutdown。判斷已經移到 syncai_robot_state（低於 20%
-    //       回報 RobotStatus::WARNING，25% 解除），缺的是「動作」：那邊只回報，這個節點
-    //       也沒有讓它呼叫的 service，所以目前沒有任何東西會讓機器人趴下。
+    // TODO: trigger a safety shutdown when soc < 20%. The judgement has moved to
+    //       syncai_robot_state (RobotStatus::WARNING below 20%, cleared above 25%); what is
+    //       missing is the actuation: that node only reports, and this one exposes no service
+    //       for it to call, so nothing lies the robot down yet.
     fn battery(&mut self) -> Option<Battery> {
         let got = self.tokens.len() - 1;
         if got < BMS_MIN_VALUES {
@@ -281,7 +294,8 @@ impl SectionParser<'_> {
             return None;
         }
 
-        // 跟參考實作（strtod）一樣寬鬆：解不出來的欄位當 0，不整包丟掉
+        // As lenient as the reference implementation (strtod): an unparsable field becomes 0
+        // rather than dropping the whole packet
         let value = |i: usize| self.tokens[i].parse::<f32>().unwrap_or(0.0);
         Some(Battery {
             voltage: value(1),

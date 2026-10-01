@@ -1,33 +1,33 @@
-# 疊在 ../docker-compose.yml 上面，只給 Dev Container 用。
-# 相對路徑以第一個 compose 檔（repo 根目錄）為基準。
+# Layered on top of ../docker-compose.yml; used only by the Dev Container.
+# Relative paths resolve against the first compose file (the repo root).
 
-# 獨立的 compose project：跟 `make up` 同一個 project 的話，
-# 兩邊輪流啟動時會互相把對方的容器砍掉重建
+# A separate compose project: sharing one with `make up` would make the two
+# tear down and recreate each other's container whenever either one starts
 name: syncai-ros2-rust-devcontainer
 
 services:
   ros2-rust:
-    # 用手動 build 的 image：
+    # Use the manually built image:
     #   docker build -f docker/Dockerfile -t syncai-ros2-rust-devcontainer .
-    # 本機沒有這張 image 時，會依下面的 build 設定自動 build 並套上這個名稱
+    # if it is not present locally, it is built from the settings below and tagged with this name
     image: syncai-ros2-rust-devcontainer:latest
     build:
       args:
-        # 固定用 uid/gid 1000 的 ros 使用者，不受 host 的 USER_UID 環境變數影響
+        # Always the ros user with uid/gid 1000, regardless of the host's USER_UID variable
         USER_UID: "1000"
         USER_GID: "1000"
-        # Dev Container 裡另外裝 Claude Code
+        # Also install Claude Code inside the Dev Container
         INSTALL_CLAUDE_CODE: "true"
     user: "1000:1000"
     container_name: syncai-ros2-rust-devcontainer
     volumes:
-      # 整個 repo 掛到 /workspace（跟 docker-compose.yml 同一個掛載點，這裡只多加 :cached），
-      # build/ install/ log/ 會寫回 host 的 repo 目錄
+      # Mount the whole repo at /workspace (same mount point as docker-compose.yml, plus :cached);
+      # build/ install/ log/ are written back to the repo directory on the host
       - .:/workspace:cached
-      # Claude Code 的設定與登入資訊，容器重建後不用重新登入
+      # Claude Code settings and login, so rebuilding the container does not require logging in again
       - claude-config:/home/ros/.claude
 
-# 沿用 `make up` 那組 cargo cache volume；編譯產物在 repo 目錄裡，兩邊本來就共用
+# Reuse the cargo cache volumes from `make up`; build output lives in the repo directory, which both already share
 volumes:
   cargo-registry:
     name: syncai-ros2-rust_cargo-registry

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 pub struct UdpSession {
     pub local_addr: SocketAddr,
-    /// `connect` 時的對方位址；`listen` 時為 None
+    /// The peer address for `connect`; None for `listen`
     pub peer_addr: Option<SocketAddr>,
     pub socket: Arc<UdpSocket>,
 }

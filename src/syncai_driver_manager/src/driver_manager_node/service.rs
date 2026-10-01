@@ -11,8 +11,9 @@ use super::command::{CommandLink, SafetyLock};
 use super::parameters::VelocityScale;
 use super::protocol;
 
-/// 四個 service 共用一個 worker（相當於 rclcpp 的一個 MutuallyExclusive callback group）：
-/// 彼此依序執行，但跟 cmd_vel 的 worker 在不同 thread，可以同時跑。
+/// The four services share one worker (the equivalent of an rclcpp MutuallyExclusive callback
+/// group): they run one at a time, but on a different thread from the cmd_vel worker, so the
+/// two can run concurrently.
 pub struct Services {
     _worker: Worker<ServiceContext>,
     _set_policy: WorkerService<SetPolicyMode, ServiceContext>,
@@ -21,10 +22,11 @@ pub struct Services {
     _reset_safety: WorkerService<Trigger, ServiceContext>,
 }
 
-/// services worker 的 payload，每個 callback 都會拿到 `&mut ServiceContext`。
+/// Payload of the services worker; every callback receives `&mut ServiceContext`.
 ///
-/// 裡面全是 Arc / thread-safe 的東西，因為它們也會在 worker 之外被用到：
-/// 速度增益 cmd_vel 也要讀，safety lock 之後 telemetry thread 也要能觸發。
+/// Everything in it is an Arc or otherwise thread-safe, because it is also used outside the
+/// worker: cmd_vel reads the velocity scales, and the telemetry thread will need to trigger the
+/// safety lock.
 pub struct ServiceContext {
     pub velocity_scale: Arc<VelocityScale>,
     pub command: Arc<CommandLink>,
@@ -87,7 +89,7 @@ impl Services {
 fn set_motion_key(command: &CommandLink, safety: &SafetyLock, key: &str) -> SetMotionKey_Response {
     let response = |success: bool, message: String| SetMotionKey_Response { success, message };
 
-    // 鎖住時只放行急停；解鎖要用 reset_safety，不是 motion key
+    // While locked only the emergency stop passes; unlock with reset_safety, not a motion key
     if safety.is_engaged() && key != protocol::ESTOP_KEY {
         return response(false, "LOCKED".into());
     }

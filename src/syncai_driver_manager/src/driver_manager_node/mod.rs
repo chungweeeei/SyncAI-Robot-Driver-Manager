@@ -25,22 +25,23 @@ use session::UdpSession;
 mod telemetry;
 use telemetry::TelemetryWorker;
 
-/// ROS 2 與下位機（gait controller）之間的邊界：這個節點以下都不是 ROS。
+/// The boundary between ROS 2 and the gait controller: nothing below this node is ROS.
 ///
-/// 兩個 UDP socket 都在建構時開好，任何一個失敗就直接回傳錯誤，節點不會半連線地起來。
+/// Both UDP sockets are opened during construction; if either fails an error is returned, so
+/// the node never comes up half-connected.
 ///
-/// 執行緒（對應 C++ 版的 callback group 設計）：
+/// Threading (mirrors the callback groups of the C++ version):
 ///
-/// | 工作            | 執行在                                                  |
-/// |-----------------|---------------------------------------------------------|
-/// | cmd_vel         | 自己的 rclrs Worker（自己一條 thread）                  |
-/// | 四個 service    | 共用一個 Worker：彼此依序執行，但跟 cmd_vel 可以同時跑  |
-/// | telemetry 接收  | 自己的 std::thread，完全不經過 executor                 |
+/// | Work              | Runs on                                                       |
+/// |-------------------|---------------------------------------------------------------|
+/// | cmd_vel           | Its own rclrs Worker (its own thread)                         |
+/// | The four services | One shared Worker: serialized, but concurrent with cmd_vel    |
+/// | Telemetry receive | Its own std::thread, entirely outside the executor            |
 pub struct DriverManagerNode {
     _node: Node,
     _udp_config: UdpConfig,
     _velocity_scale: Arc<VelocityScale>,
-    // 先 drop：停下並 join telemetry thread，之後 socket 才會跟著關掉
+    // Dropped first: stops and joins the telemetry thread before the sockets are closed
     _telemetry: TelemetryWorker,
     _subscribers: Subscribers,
     _services: Services,

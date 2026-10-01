@@ -7,7 +7,7 @@ pub struct Publishers {
     pub imu: Publisher<IMUState>,
     pub motor_states: Publisher<MotorStates>,
     pub battery_state: Publisher<BatteryState>,
-    // data[0] = policy state, data[1] = motion state（見 syncai_common 的 RobotLowLevelMode.msg）
+    // data[0] = policy state, data[1] = motion state (see RobotLowLevelMode.msg in syncai_common)
     pub mode: Publisher<Int32MultiArray>,
 }
 
@@ -16,8 +16,8 @@ impl Publishers {
         Ok(Self {
             imu: node.create_publisher("imu".sensor_data_qos())?,
             motor_states: node.create_publisher("motor_states".sensor_data_qos())?,
-            // 這兩個跟 C++ 版一樣用 reliable depth 10：syncai_robot_state 用 reliable 訂閱
-            // `mode`，publisher 若是 best effort 就配對不起來
+            // Reliable depth 10, same as the C++ version: syncai_robot_state subscribes to
+            // `mode` as reliable, which a best-effort publisher would not match
             battery_state: node.create_publisher("battery_state".keep_last(10))?,
             mode: node.create_publisher("mode".keep_last(10))?,
         })

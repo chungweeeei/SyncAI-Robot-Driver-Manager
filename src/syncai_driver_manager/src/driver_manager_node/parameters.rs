@@ -3,12 +3,14 @@ use std::error::Error;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
-/// 各方向的 cmd_vel -> 實際速度修正增益。
+/// Per-direction cmd_vel -> actual velocity correction gains.
 ///
-/// 下位機對不同方向的追蹤程度不一樣（前進 vs 後退……），所以每個方向各自一個經驗值，
-/// 依指令的正負號挑選。預設 1.0，校正值放在 params/driver_manager_params.yaml。
+/// The gait controller tracks each direction differently (forward vs backward, ...), so each
+/// direction has its own empirical gain, picked by the sign of the command. Defaults to 1.0;
+/// the calibrated values live in params/driver_manager_params.yaml.
 ///
-/// `set_speed_scale` 會在執行時改寫這些參數，但不會寫回 YAML，重啟後回到 YAML 的值。
+/// `set_speed_scale` overwrites these at runtime but does not write back to the YAML, so a
+/// restart returns to the YAML values.
 pub struct VelocityScale {
     pub forward: MandatoryParameter<f64>,
     pub backward: MandatoryParameter<f64>,
@@ -23,7 +25,8 @@ impl VelocityScale {
         let scale = |name: &str| {
             node.declare_parameter(name)
                 .default(1.0)
-                // 沒有上限：校正值本來就會 > 1（目前出貨值是 1.40）；負值會讓方向反轉，不接受
+                // No upper bound: calibrated values are > 1 (1.40 as shipped). Negative values
+                // would reverse the direction, so they are rejected.
                 .range(ParameterRange {
                     lower: Some(0.0),
                     upper: None,
@@ -44,7 +47,7 @@ impl VelocityScale {
     }
 }
 
-/// UDP 位址在 socket 建立後就不能改，所以宣告成 read-only
+/// The UDP endpoints cannot change once the sockets are open, so they are read-only
 pub struct UdpConfig {
     pub telemetry_recv_ip: ReadOnlyParameter<Arc<str>>,
     pub telemetry_recv_port: ReadOnlyParameter<i64>,

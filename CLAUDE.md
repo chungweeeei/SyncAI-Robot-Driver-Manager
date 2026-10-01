@@ -64,7 +64,7 @@ MutuallyExclusive callback group，兩個 worker 會並行），telemetry 自己
 
 ## 慣例
 
-- 程式註解用**繁體中文**，log 訊息用英文並加 `[Module]` 前綴（例如 `[Telemetry]`、`[DriverManagerNode]`）。
+- 程式碼與設定檔（Rust、Cargo.toml、Makefile、compose、toml…）的**註解一律用英文**；log 訊息也是英文，並加 `[Module]` 前綴（例如 `[Telemetry]`、`[DriverManagerNode]`）。README / CLAUDE.md 等說明文件用繁體中文。
 - 格式依 repo 根目錄的 `rustfmt.toml`（max_width 100）；Cargo.toml 開了 `unsafe_code = "forbid"`
   和 `clippy::all`。
 - Commit 用 Conventional Commits（`.github/prompt/copilot-commit-message-instructions.md`），英文。
