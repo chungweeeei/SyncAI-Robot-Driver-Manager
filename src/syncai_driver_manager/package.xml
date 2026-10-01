@@ -3,13 +3,16 @@
 <package format="3">
   <name>syncai_driver_manager</name>
   <version>0.1.0</version>
-  <description>My rclrs node</description>
+  <description>Bridges the robot low-level controller (UDP) to ROS 2 topics</description>
   <maintainer email="andy_tseng@syncrobotic.com">andy_tseng</maintainer>
   <license>Apache-2.0</license>
 
   <depend>rclrs</depend>
   <depend>rosidl_runtime_rs</depend>
+  <depend>syncai_common</depend>
+  <depend>geometry_msgs</depend>
   <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
 
   <export>
     <build_type>ament_cargo</build_type>
