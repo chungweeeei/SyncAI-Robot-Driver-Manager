@@ -136,14 +136,69 @@ ros2 topic echo /default_robot/battery_state
                 └── service.rs      # set_motion_key / set_policy_mode / set_speed_scale / reset_safety
 ```
 
+## syncai_driver_manager 節點
+
+ROS 2 與下位機（gait controller）之間的邊界：ASCII 指令經 UDP 送出、ASCII telemetry 經 UDP
+收進來。這是 SyncAI-Robot-Workspace 裡 C++（rclcpp）版 `syncai_driver_manager` 的 Rust 移植，
+**對外介面刻意維持一樣**——node 名稱 `driver_manager`、執行檔 `driver_manager_node`、參數名稱、
+topic、訊息型別、QoS、service 名稱都相同，所以可以直接替換 C++ 版，`syncai_robot_state` /
+`syncai_backend` 不用改。封包格式、motion key 對照表、速度校正的由來等行為細節，以 C++ 版的
+README 為準。
+
+| 方向 | 介面 |
+| --- | --- |
+| 發佈 | `imu`（`syncai_common/IMUState`，SensorData）、`motor_states`（`syncai_common/MotorStates`，SensorData）、`battery_state`（`sensor_msgs/BatteryState`，reliable depth 10）、`mode`（`std_msgs/Int32MultiArray`，reliable depth 10） |
+| 訂閱 | `cmd_vel`（`geometry_msgs/Twist`）→ `AXES vx vy wz` |
+| Service | `set_motion_key`、`set_policy_mode`、`set_speed_scale`、`reset_safety` |
+| 參數 | `telemetry_recv_ip/port`、`command_target_ip/port`（read-only）、`scale_fwd` / `scale_back` / `scale_left` / `scale_right` / `scale_turn_l` / `scale_turn_r`（>= 0，可用 `ros2 param set` 或 `set_speed_scale` 動態改，不會寫回 YAML） |
+
+### 執行緒
+
+| 工作 | 執行在 | 對應 C++ 版 |
+| --- | --- | --- |
+| `cmd_vel` | 自己的 rclrs Worker | `cmd_vel_cb_group_` |
+| 四個 service | 共用一個 Worker，彼此依序執行 | `services_cb_group_` |
+| telemetry 接收 | 自己的 `std::thread`，不經過 executor | 一樣 |
+
+跨 worker / thread 共用的東西（速度增益、safety lock、送指令的 socket）都是 thread-safe 的：
+增益是 ROS 參數，safety lock 是 `AtomicBool`，socket 是 `Arc<UdpSocket>`。
+
+### 跟 C++ 版不一樣的地方
+
+* **params YAML 的 key 是 `/**`，不是 `/**/driver_manager`。** rclrs 只認得完全等於 `/**` 或
+  node 完整名稱（`/<robot_id>/driver_manager`）的 key，**不展開萬用字元**；寫成
+  `/**/driver_manager` 不會報錯，只會默默全部用程式碼預設值（速度增益變回 1.0）。
+* **速度增益是 ROS 參數**，可以動態改；範圍 >= 0，負值會被拒絕（C++ 版照收）。
+* **送指令失敗會記 log**（限流 1 秒）；C++ 版直接丟掉 `sendto()` 的回傳值。
+* **沒有 SIGINT handler。** rclrs 不處理訊號，Ctrl-C / `ros2 launch` 關閉時程式直接被預設動作
+  結束，`Drop` 不會跑（socket 由 OS 關掉）。另外，用 `&` 丟到背景的非互動 shell script 會忽略
+  SIGINT，在 script 裡要停它請用 SIGTERM。
+
+### 測試
+
+```bash
+make shell
+cd src/syncai_driver_manager && cargo test --target-dir /workspace/build/.clippy
+```
+
+`protocol.rs` 是純函式（封包 <-> 資料結構），unit test 不需要 ROS 環境或實機。
+端對端測試請用 loopback（`-p telemetry_recv_ip:=127.0.0.1 -p command_target_ip:=127.0.0.1`
+加上其他 port）與獨立的 `ROS_DOMAIN_ID`，**不要對 `192.168.1.120` 送指令**——那是實機的控制器。
+
 ## 程式碼重點
 
 `rclrs` 的寫法跟 `rclcpp` / `rclpy` 有幾個明顯差異：
 
 * **Executor 先於 Node。** 先 `Context::default_from_env()?.create_basic_executor()`，
   再用 executor 建 node，最後 `executor.spin(...)`。
-* **Worker 取代自己管 `Arc<Mutex<..>>`。** `node.create_worker::<T>(初始值)` 產生一個持有狀態的 worker，
-  它建立的 subscription / timer callback 會拿到 `&mut T`，由 rclrs 保證不會同時被兩個 callback 存取。
+* **Worker 就是 rclrs 的 callback group。** `node.create_worker::<T>(初始值)` 產生一個持有狀態的
+  worker，它建立的 subscription / service / timer callback 會拿到 `&mut T`。
+  * 同一個 worker 底下的 callback **依序執行**（等同 rclcpp 的 `MutuallyExclusive` group），
+    所以 payload 不用自己包 `Arc<Mutex<..>>`。
+  * 每個 worker 有**自己的 wait-set thread**，callback 直接在那條 thread 上跑，所以不同 worker
+    之間會**並行**——即使用的是單執行緒的 `BasicExecutor`。
+  * 直接掛在 node 上的 `node.create_subscription(...)` / `node.create_service(...)` 則全部排進
+    executor 的同一條 thread，彼此互卡。
 * **訊息型別來自 `ros-env`。** `use ros_env::std_msgs::msg::String;`
   ——訊息套件不寫在 `Cargo.toml` 的 `[dependencies]`，而是宣告在 `package.xml` 裡，
   由 `colcon-ros-cargo` 在編譯時接上。
