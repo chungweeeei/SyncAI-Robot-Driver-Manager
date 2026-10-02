@@ -11,7 +11,7 @@ use ros_env::sensor_msgs::msg::BatteryState;
 use ros_env::std_msgs::msg::{Header, Int32MultiArray};
 use ros_env::syncai_common::msg::{IMUState, MotorState, MotorStates};
 
-use super::protocol::{self, Battery, JOINT_NAMES, NUM_DOF, Sections, Telemetry};
+use super::protocol::{self, Battery, ChargeState, JOINT_NAMES, NUM_DOF, Sections, Telemetry};
 use super::publishers::Publishers;
 use super::session::UdpSession;
 
@@ -134,10 +134,15 @@ impl TelemetryLoop {
             charge: f32::NAN,
             capacity: f32::NAN,
             design_capacity: f32::NAN,
-            power_supply_status: BatteryState::POWER_SUPPLY_STATUS_UNKNOWN,
+            power_supply_status: match battery.charge_state {
+                ChargeState::Charging => BatteryState::POWER_SUPPLY_STATUS_CHARGING,
+                ChargeState::Discharging => BatteryState::POWER_SUPPLY_STATUS_DISCHARGING,
+                ChargeState::Idle => BatteryState::POWER_SUPPLY_STATUS_NOT_CHARGING,
+            },
             power_supply_health: BatteryState::POWER_SUPPLY_HEALTH_UNKNOWN,
             power_supply_technology: BatteryState::POWER_SUPPLY_TECHNOLOGY_UNKNOWN,
             present: true,
+            cell_voltage: battery.cells.map(Vec::from).unwrap_or_default(),
             ..Default::default()
         };
         self.publish(&self.publishers.battery_state, msg, "battery_state");

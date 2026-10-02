@@ -54,8 +54,23 @@ const KEYWORDS: [&str; 10] = [
     "MODE_STATE",
 ];
 
-/// Minimum number of BMS_V2 values (voltage current soc ... temp1 temp2)
+/// BMS_V2 value layout, as sent by the controller's bms.rs (1-based, token 0 is the keyword):
+///
+/// ```text
+/// 1 voltage[V]  2 current[A]  3 soc[%]  4 soh  5 mode  6 event1
+/// 7 thm0[C]  8 thm1[C]  9 thm2[C]  10 internal[C]  11..18 cell[0..7][V]
+/// ```
+///
+/// Everything up to thm1 is needed for the fields this node fills; the cells are optional so a
+/// shorter packet still yields a battery reading.
+const BMS_FULL_VALUES: usize = 18;
 const BMS_MIN_VALUES: usize = 8;
+const BMS_CELL_FIRST: usize = 11;
+const BMS_NUM_CELLS: usize = 8;
+
+/// Below this current magnitude [A] the pack is neither charging nor discharging; the same
+/// deadband bms.rs uses for its own mode code
+const BMS_IDLE_CURRENT: f32 = 0.1;
 
 /// Lies the robot down; sent when the safety lock is triggered
 pub const LIE_DOWN_COMMAND: &str = "MODE X\n";
@@ -129,8 +144,34 @@ pub struct Battery {
     pub current: f32,
     /// State of charge as reported by the BMS, 0-100 (not 0-1)
     pub soc: f32,
-    /// Mean of the two temperature sensors
+    /// Mean of the thermistors that reported a value; NaN if none did
     pub temperature: f32,
+    pub charge_state: ChargeState,
+    /// Per-cell voltages, only when the packet carries all of them; a cell bms.rs has not read
+    /// yet is NaN
+    pub cells: Option<[f32; BMS_NUM_CELLS]>,
+}
+
+/// Derived from the current sign (BatteryState: negative while discharging) rather than
+/// bms.rs's mode field, which checks the CHG FET bit first. That bit is also set during normal
+/// discharge, so the mode field can read "charging" while the robot is walking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChargeState {
+    Charging,
+    Discharging,
+    Idle,
+}
+
+impl ChargeState {
+    fn from_current(current: f32) -> Self {
+        if current > BMS_IDLE_CURRENT {
+            Self::Charging
+        } else if current < -BMS_IDLE_CURRENT {
+            Self::Discharging
+        } else {
+            Self::Idle
+        }
+    }
 }
 
 /// A non-BMS datagram; sections that are absent or fail to parse are None
@@ -184,6 +225,9 @@ pub enum ParseWarning {
         expected: usize,
         got: usize,
     },
+    /// BMS_V2 has optional trailing values, so its message states both the full layout and the
+    /// minimum
+    BmsTooShort { got: usize },
     InvalidToken {
         section: &'static str,
         token: String,
@@ -198,6 +242,10 @@ impl fmt::Display for ParseWarning {
                 expected,
                 got,
             } => write!(f, "{section}: expected {expected} values, got {got}"),
+            Self::BmsTooShort { got } => write!(
+                f,
+                "BMS_V2: expected {BMS_FULL_VALUES} values (minimum {BMS_MIN_VALUES}), got {got}"
+            ),
             Self::InvalidToken { section, token } => {
                 write!(f, "{section}: invalid token '{token}'")
             }
@@ -312,22 +360,42 @@ impl SectionParser<'_> {
     fn battery(&mut self) -> Option<Battery> {
         let got = self.tokens.len() - 1;
         if got < BMS_MIN_VALUES {
-            self.warnings.push(ParseWarning::TooFewValues {
-                section: "BMS_V2",
-                expected: BMS_MIN_VALUES,
-                got,
-            });
+            self.warnings.push(ParseWarning::BmsTooShort { got });
             return None;
         }
 
         // As lenient as the reference implementation (strtod): an unparsable field becomes 0
         // rather than dropping the whole packet
         let value = |i: usize| self.tokens[i].parse::<f32>().unwrap_or(0.0);
+        // bms.rs sends 0.0 for a sensor it has not read yet, so 0.0 means "missing" here
+        let present = |v: f32| v.is_finite() && v != 0.0;
+
+        // A plain mean would be dragged toward zero by a missing thermistor
+        let temps: Vec<f32> = [value(7), value(8)]
+            .into_iter()
+            .filter(|&t| present(t))
+            .collect();
+        let temperature = if temps.is_empty() {
+            f32::NAN
+        } else {
+            temps.iter().sum::<f32>() / temps.len() as f32
+        };
+
+        let cells = (got >= BMS_FULL_VALUES).then(|| {
+            std::array::from_fn(|i| {
+                let v = value(BMS_CELL_FIRST + i);
+                if present(v) { v } else { f32::NAN }
+            })
+        });
+
+        let current = value(2);
         Some(Battery {
             voltage: value(1),
-            current: value(2),
+            current,
             soc: value(3),
-            temperature: (value(7) + value(8)) / 2.0,
+            temperature,
+            charge_state: ChargeState::from_current(current),
+            cells,
         })
     }
 }
@@ -356,32 +424,69 @@ mod tests {
         assert_eq!(parse_telemetry(" \n\t "), (None, vec![]));
     }
 
+    fn battery(line: &str) -> Battery {
+        match parse_telemetry(line) {
+            (Some(Telemetry::Battery(b)), w) if w.is_empty() => b,
+            other => panic!("expected battery, got {other:?}"),
+        }
+    }
+
     #[test]
-    fn battery() {
-        let (t, w) = parse_telemetry("BMS_V2 48.5 -2.25 87 x x x 30 34 3.7 3.7\n");
-        assert!(w.is_empty());
+    fn battery_minimum_packet() {
+        let b = battery("BMS_V2 48.5 -2.25 87 x x x 30 34 3.7 3.7\n");
         assert_eq!(
-            t,
-            Some(Telemetry::Battery(Battery {
+            b,
+            Battery {
                 voltage: 48.5,
                 current: -2.25,
                 soc: 87.0,
                 temperature: 32.0,
-            }))
+                charge_state: ChargeState::Discharging,
+                cells: None,
+            }
         );
+    }
+
+    #[test]
+    fn battery_full_packet_from_bms_rs() {
+        // The exact format bms.rs emits; cell 6 has not been read yet
+        let b = battery(
+            "BMS_V2 30.12 3.45 85.8 1000 1 0 25.0 26.0 27.0 30.0 \
+             3.765 3.766 3.767 3.768 3.769 3.770 0.000 3.772\n",
+        );
+        assert_eq!(b.temperature, 25.5);
+        assert_eq!(b.charge_state, ChargeState::Charging);
+        let cells = b.cells.unwrap();
+        assert_eq!(cells[0], 3.765);
+        assert!(cells[6].is_nan());
+        assert_eq!(cells[7], 3.772);
+    }
+
+    #[test]
+    fn battery_missing_thermistors() {
+        // One missing: the other is used as-is, not halved
+        assert_eq!(battery("BMS_V2 30 0 50 0 0 0 0.0 26.0").temperature, 26.0);
+        // Both missing: NaN, BatteryState's "unmeasured"
+        assert!(battery("BMS_V2 30 0 50 0 0 0 0.0 0.0").temperature.is_nan());
+    }
+
+    #[test]
+    fn battery_charge_state_deadband() {
+        let state = |i: &str| battery(&format!("BMS_V2 30 {i} 50 0 0 0 25 25")).charge_state;
+        assert_eq!(state("0.05"), ChargeState::Idle);
+        assert_eq!(state("-0.1"), ChargeState::Idle);
+        assert_eq!(state("0.2"), ChargeState::Charging);
+        assert_eq!(state("-0.2"), ChargeState::Discharging);
     }
 
     #[test]
     fn battery_too_short() {
         let (t, w) = parse_telemetry("BMS_V2 48.5 1 87");
         assert_eq!(t, None);
+        assert_eq!(w, vec![ParseWarning::BmsTooShort { got: 3 }]);
         assert_eq!(
-            w,
-            vec![ParseWarning::TooFewValues {
-                section: "BMS_V2",
-                expected: 8,
-                got: 3
-            }]
+            w[0].to_string(),
+            "BMS_V2: expected 18 values (minimum 8), got 3"
         );
     }
 
