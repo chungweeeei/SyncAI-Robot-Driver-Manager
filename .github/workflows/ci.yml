@@ -1,0 +1,90 @@
+# Build, lint and test the package inside the same image as the Dev Container
+# (.devcontainer/Dockerfile), so CI and local development share one toolchain:
+# ROS 2 humble + the ros2_rust underlay + Rust 1.85.
+#
+# The image is cached in the GitHub Actions cache; only a Dockerfile change (or a cache eviction)
+# rebuilds the ros2_rust underlay, which is the slow part.
+#
+# Nothing here talks to the robot: tests only use loopback, and ROS_DOMAIN_ID is isolated.
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: syncai-ros2-rust-ci
+  CONTAINER: syncai-ci
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build Dev Container image
+        uses: docker/build-push-action@v6
+        with:
+          context: .devcontainer
+          build-args: |
+            ROS_DISTRO=humble
+            USER_UID=1000
+            USER_GID=1000
+            INSTALL_CLAUDE_CODE=false
+          tags: ${{ env.IMAGE }}
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # The repo is mounted read-only at /src and copied into the workspace, so the container's
+      # ros user (uid 1000) does not need write access to the runner's checkout (uid 1001)
+      - name: Start container
+        run: |
+          docker run -d --name "$CONTAINER" \
+            -v "$GITHUB_WORKSPACE:/src:ro" \
+            -e ROS_DOMAIN_ID=77 \
+            -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
+            "$IMAGE" sleep infinity
+          docker exec "$CONTAINER" bash -c \
+            'cp -r /src/. /workspace/src/syncai_driver_manager/'
+
+      - name: Import syncai_common
+        run: |
+          docker exec "$CONTAINER" bash -lc \
+            'cd /workspace && vcs import < src/syncai_driver_manager/interface.repos'
+
+      - name: colcon build
+        run: |
+          docker exec "$CONTAINER" bash -lc \
+            'cd /workspace && colcon build --symlink-install --packages-up-to syncai_driver_manager --event-handlers console_direct+'
+
+      - name: cargo fmt
+        run: |
+          docker exec "$CONTAINER" bash -lc \
+            'cd /workspace/src/syncai_driver_manager && cargo fmt --check'
+
+      - name: cargo clippy
+        run: |
+          docker exec "$CONTAINER" bash -lc \
+            'cd /workspace/src/syncai_driver_manager && cargo clippy --target-dir /workspace/build/.clippy --all-targets -- -D warnings'
+
+      - name: cargo test
+        run: |
+          docker exec "$CONTAINER" bash -lc \
+            'cd /workspace/src/syncai_driver_manager && cargo test --target-dir /workspace/build/.clippy'
+
+      - name: Stop container
+        if: always()
+        run: docker rm -f "$CONTAINER" || true
