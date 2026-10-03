@@ -58,6 +58,9 @@ ARG RUST_VERSION=1.85.0
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
       | sh -s -- --default-toolchain ${RUST_VERSION} -y --no-modify-path --component rustfmt --component clippy
 ENV PATH=${HOME}/.cargo/bin:${PATH}
+# The underlay has no Cargo.lock, so every image build resolves the newest crates; without this,
+# a dependency that raises its MSRV past RUST_VERSION (e.g. uuid 1.27 needs 1.89) breaks the build
+ENV CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback
 
 
 RUN mkdir -p ${ROS2_RUST_UNDERLAY}/src \
