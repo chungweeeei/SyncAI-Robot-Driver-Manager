@@ -38,10 +38,10 @@ impl CommandLink {
 }
 
 /// While engaged, `set_motion_key` only lets ESTOP through and cmd_vel is dropped without
-/// sending anything; only the `reset_safety` service releases it.
+/// sending anything; only the `set_safety_lock` service (with `false`) releases it.
 ///
-/// Nothing triggers it yet (low battery and JOINT_TEMP overheat are both still TODO), so in
-/// practice it is never engaged.
+/// No automatic trigger is wired yet (low battery and JOINT_TEMP overheat are both still TODO),
+/// so today it is only engaged from outside through `set_safety_lock` (with `true`).
 /// Also, unlike the reference implementation, set_policy_mode is **not** gated by it.
 ///
 /// Every state change is published on the latched `safety_locked` topic (see
@@ -77,6 +77,16 @@ impl SafetyLock {
 
     pub fn is_engaged(&self) -> bool {
         self.engaged.load(Ordering::Acquire)
+    }
+
+    /// Engages the lock without sending any command, so the robot keeps its current motion;
+    /// returns whether it was released before
+    pub fn engage(&self) -> bool {
+        let was_released = !self.engaged.swap(true, Ordering::AcqRel);
+        if was_released {
+            self.publish_state();
+        }
+        was_released
     }
 
     /// Releases the lock; returns whether it was engaged

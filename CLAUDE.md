@@ -5,7 +5,8 @@ and the quadruped robot's low-level controller (gait controller). It is a port o
 `~/SyncAI-Robot-Workspace/src/syncai_driver_manager` (C++ / rclcpp), and **its external interface
 must stay identical to the C++ version** (node name, executable name, parameter names, topics,
 message types, QoS, service names): `syncai_robot_state` and `syncai_backend` both depend on it.
-When behaviour is in doubt, the C++ version is authoritative.
+When behaviour is in doubt, the C++ version is authoritative. Deliberate exceptions: the added
+`safety_locked` topic, and `set_safety_lock` (`std_srvs/SetBool`), which replaces `reset_safety`.
 
 **The repo root is the package itself** (`package.xml` and `Cargo.toml` are at the root); the
 Workspace pulls it into `src/syncai_driver_manager` with vcstool (replacing the C++ version).

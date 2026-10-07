@@ -119,7 +119,7 @@ cargo test --target-dir /workspace/build/.clippy
 │       ├── telemetry.rs    # receive telemetry and publish it as ROS messages
 │       ├── publishers.rs   # imu / motor_states / battery_state / mode / safety_locked
 │       ├── subscriber.rs   # cmd_vel -> AXES
-│       └── service.rs      # set_motion_key / set_policy_mode / set_speed_scale / reset_safety
+│       └── service.rs      # set_motion_key / set_policy_mode / set_speed_scale / set_safety_lock
 │
 │   # Only for developing this repo on its own; SyncAI-Robot-Workspace does not use these
 ├── interface.repos         # vcstool list: where the shared syncai_common messages come from
@@ -159,8 +159,9 @@ The boundary between ROS 2 and the low-level controller (gait controller): ASCII
 over UDP and ASCII telemetry comes in over UDP. It is a Rust port of the C++ (rclcpp)
 `syncai_driver_manager` in SyncAI-Robot-Workspace, and **its external interface is deliberately
 identical**: the node name `driver_manager`, the executable `driver_manager_node`, parameter names,
-topics, message types, QoS and service names are all the same, so it is a drop-in replacement for
-the C++ version and `syncai_robot_state` / `syncai_backend` need no changes. For behavioural details
+topics, message types, QoS and service names are all the same, except for the `safety_locked` topic
+(added) and the `set_safety_lock` service (replaces `reset_safety`); see the differences below.
+Anything that calls `reset_safety` must switch to `set_safety_lock`. For behavioural details
 such as the packet format, the motion key table and where the velocity correction comes from, the
 C++ README is authoritative.
 
@@ -168,7 +169,7 @@ C++ README is authoritative.
 | --- | --- |
 | Publishes | `imu` (`syncai_common/IMUState`, SensorData), `motor_states` (`syncai_common/MotorStates`, SensorData), `battery_state` (`sensor_msgs/BatteryState`, reliable depth 10), `mode` (`std_msgs/Int32MultiArray`, reliable depth 10), `safety_locked` (`std_msgs/Bool`, reliable + transient local depth 1; published at startup and whenever the safety lock changes; **Rust-only addition**, not in the C++ version) |
 | Subscribes | `cmd_vel` (`geometry_msgs/Twist`) → `AXES vx vy wz` |
-| Services | `set_motion_key`, `set_policy_mode`, `set_speed_scale`, `reset_safety` |
+| Services | `set_motion_key`, `set_policy_mode`, `set_speed_scale`, `set_safety_lock` (`std_srvs/SetBool`: `true` engages the safety lock without sending any command, `false` releases it; **replaces the C++ version's `reset_safety`** (`std_srvs/Trigger`), so callers of `reset_safety` must switch) |
 | Parameters | `telemetry_recv_ip/port`, `command_target_ip/port` (read-only), `scale_fwd` / `scale_back` / `scale_left` / `scale_right` / `scale_turn_l` / `scale_turn_r` (>= 0, changeable at runtime with `ros2 param set` or `set_speed_scale`; never written back to the YAML) |
 
 ### Threads
@@ -191,6 +192,9 @@ thread-safe: the gains are ROS parameters, the safety lock is an `AtomicBool`, a
   defaults for everything (the velocity gains go back to 1.0).
 * **The velocity gains are ROS parameters** and can be changed at runtime; the range is >= 0 and
   negative values are rejected (the C++ version accepts them).
+* **`reset_safety` is replaced by `set_safety_lock` (`std_srvs/SetBool`).** It can also engage the
+  lock from outside (`true`, no lie-down command sent), not only release it (`false`). While the
+  lock is engaged, cmd_vel is dropped as well, not only motion keys other than ESTOP.
 * **Failed command sends are logged** (throttled to once a second); the C++ version discards the
   return value of `sendto()`.
 * **There is no SIGINT handler.** rclrs does not handle signals, so Ctrl-C / `ros2 launch` shutdown

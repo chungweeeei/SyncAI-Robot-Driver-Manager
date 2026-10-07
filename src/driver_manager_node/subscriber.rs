@@ -32,7 +32,7 @@ impl Subscribers {
                 "cmd_vel".keep_last(10),
                 |ctx: &mut CmdVelContext, msg: Twist| {
                     // While the safety lock is engaged cmd_vel is dropped: nothing goes out on
-                    // the command socket until reset_safety releases it
+                    // the command socket until set_safety_lock releases it
                     if ctx.safety.is_engaged() {
                         return;
                     }
