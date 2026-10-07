@@ -1,6 +1,6 @@
 use rclrs::*;
 use ros_env::sensor_msgs::msg::BatteryState;
-use ros_env::std_msgs::msg::Int32MultiArray;
+use ros_env::std_msgs::msg::{Bool, Int32MultiArray};
 use ros_env::syncai_common::msg::{IMUState, MotorStates};
 
 pub struct Publishers {
@@ -22,4 +22,12 @@ impl Publishers {
             mode: node.create_publisher("mode".keep_last(10))?,
         })
     }
+}
+
+/// `safety_locked`: whether the safety lock is engaged. Published only when it changes (plus
+/// once at startup), so it is reliable + transient local depth 1: a late subscriber still
+/// gets the current state. Owned by `SafetyLock`, not `Publishers`, because the lock changes
+/// on the services worker as well as the telemetry thread.
+pub fn create_safety_locked(node: &Node) -> Result<Publisher<Bool>, RclrsError> {
+    node.create_publisher("safety_locked".keep_last(1).reliable().transient_local())
 }
