@@ -117,7 +117,7 @@ cargo test --target-dir /workspace/build/.clippy
 │       ├── session.rs      # UDP sockets
 │       ├── command.rs      # send commands to the controller, safety lock
 │       ├── telemetry.rs    # receive telemetry and publish it as ROS messages
-│       ├── publishers.rs   # imu / motor_states / battery_state / mode
+│       ├── publishers.rs   # imu / motor_states / battery_state / mode / safety_locked
 │       ├── subscriber.rs   # cmd_vel -> AXES
 │       └── service.rs      # set_motion_key / set_policy_mode / set_speed_scale / reset_safety
 │
@@ -166,7 +166,7 @@ C++ README is authoritative.
 
 | Direction | Interface |
 | --- | --- |
-| Publishes | `imu` (`syncai_common/IMUState`, SensorData), `motor_states` (`syncai_common/MotorStates`, SensorData), `battery_state` (`sensor_msgs/BatteryState`, reliable depth 10), `mode` (`std_msgs/Int32MultiArray`, reliable depth 10) |
+| Publishes | `imu` (`syncai_common/IMUState`, SensorData), `motor_states` (`syncai_common/MotorStates`, SensorData), `battery_state` (`sensor_msgs/BatteryState`, reliable depth 10), `mode` (`std_msgs/Int32MultiArray`, reliable depth 10), `safety_locked` (`std_msgs/Bool`, reliable + transient local depth 1; published at startup and whenever the safety lock changes; **Rust-only addition**, not in the C++ version) |
 | Subscribes | `cmd_vel` (`geometry_msgs/Twist`) → `AXES vx vy wz` |
 | Services | `set_motion_key`, `set_policy_mode`, `set_speed_scale`, `reset_safety` |
 | Parameters | `telemetry_recv_ip/port`, `command_target_ip/port` (read-only), `scale_fwd` / `scale_back` / `scale_left` / `scale_right` / `scale_turn_l` / `scale_turn_r` (>= 0, changeable at runtime with `ros2 param set` or `set_speed_scale`; never written back to the YAML) |

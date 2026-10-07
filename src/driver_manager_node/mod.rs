@@ -73,7 +73,10 @@ impl DriverManagerNode {
         );
 
         let command = Arc::new(CommandLink::new(command_session, node.logger().clone()));
-        let safety = Arc::new(SafetyLock::default());
+        let safety = Arc::new(SafetyLock::new(
+            publishers::create_safety_locked(&node)?,
+            node.logger().clone(),
+        ));
 
         let subscribers = Subscribers::create(
             &node,

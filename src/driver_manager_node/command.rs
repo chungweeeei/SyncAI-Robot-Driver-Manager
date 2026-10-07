@@ -1,7 +1,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use rclrs::*;
+use ros_env::std_msgs::msg::Bool;
 
 use super::protocol;
 use super::session::UdpSession;
@@ -42,19 +44,49 @@ impl CommandLink {
 /// practice it is never engaged.
 /// Also, unlike the reference implementation, cmd_vel and set_policy_mode are **not** gated
 /// by it.
+///
+/// Every state change is published on the latched `safety_locked` topic (see
+/// [`SafetyLock::new`]); `Default` builds one without a publisher, for tests.
 #[derive(Default)]
 pub struct SafetyLock {
     engaged: AtomicBool,
+    state: Option<StatePublisher>,
+}
+
+struct StatePublisher {
+    publisher: Publisher<Bool>,
+    // Serializes publishes; see `SafetyLock::publish_state`
+    order: Mutex<()>,
+    logger: Logger,
 }
 
 impl SafetyLock {
+    /// Publishes the initial (released) state right away, so a transient-local subscriber
+    /// always has a value even if the lock never changes.
+    pub fn new(publisher: Publisher<Bool>, logger: Logger) -> Self {
+        let lock = Self {
+            engaged: AtomicBool::new(false),
+            state: Some(StatePublisher {
+                publisher,
+                order: Mutex::new(()),
+                logger,
+            }),
+        };
+        lock.publish_state();
+        lock
+    }
+
     pub fn is_engaged(&self) -> bool {
         self.engaged.load(Ordering::Acquire)
     }
 
     /// Releases the lock; returns whether it was engaged
     pub fn release(&self) -> bool {
-        self.engaged.swap(false, Ordering::AcqRel)
+        let was_engaged = self.engaged.swap(false, Ordering::AcqRel);
+        if was_engaged {
+            self.publish_state();
+        }
+        was_engaged
     }
 
     /// Engages the lock and lies the robot down (MODE X). The swap is an atomic check-and-set,
@@ -74,6 +106,21 @@ impl SafetyLock {
                 "[Safety] Executing LieDown [MODE X] and blocking control"
             );
             command.send(protocol::LIE_DOWN_COMMAND);
+            self.publish_state();
+        }
+    }
+
+    /// Publishes the state as it is *now*, not the value the caller swapped in. The read
+    /// happens under the mutex, so the last publish always follows the last swap: when a
+    /// trigger and a release race, the latched message still ends up matching `engaged`.
+    fn publish_state(&self) {
+        let Some(state) = &self.state else { return };
+        let _order = state.order.lock().unwrap_or_else(PoisonError::into_inner);
+        let msg = Bool {
+            data: self.is_engaged(),
+        };
+        if let Err(e) = state.publisher.publish(msg) {
+            log_error!(&state.logger, "[Safety] publish safety_locked failed: {e}");
         }
     }
 }
