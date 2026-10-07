@@ -2,7 +2,7 @@ use rclrs::*;
 use ros_env::geometry_msgs::msg::Twist;
 use std::sync::Arc;
 
-use super::command::CommandLink;
+use super::command::{CommandLink, SafetyLock};
 use super::parameters::VelocityScale;
 use super::protocol;
 
@@ -17,6 +17,7 @@ pub struct Subscribers {
 pub struct CmdVelContext {
     pub velocity_scale: Arc<VelocityScale>,
     pub command: Arc<CommandLink>,
+    pub safety: Arc<SafetyLock>,
 }
 
 impl Subscribers {
@@ -30,6 +31,11 @@ impl Subscribers {
             _cmd_vel: worker.create_subscription(
                 "cmd_vel".keep_last(10),
                 |ctx: &mut CmdVelContext, msg: Twist| {
+                    // While the safety lock is engaged cmd_vel is dropped: nothing goes out on
+                    // the command socket until reset_safety releases it
+                    if ctx.safety.is_engaged() {
+                        return;
+                    }
                     // Quadruped planar command: forward velocity, lateral velocity, yaw rate
                     let (vx, vy, wz) = protocol::scale_velocity(
                         [msg.linear.x, msg.linear.y, msg.angular.z],

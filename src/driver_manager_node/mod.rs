@@ -83,6 +83,7 @@ impl DriverManagerNode {
             CmdVelContext {
                 velocity_scale: Arc::clone(&velocity_scale),
                 command: Arc::clone(&command),
+                safety: Arc::clone(&safety),
             },
         )?;
         let services = Services::create(

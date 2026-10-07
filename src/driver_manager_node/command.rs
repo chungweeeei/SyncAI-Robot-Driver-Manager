@@ -37,13 +37,12 @@ impl CommandLink {
     }
 }
 
-/// While engaged, `set_motion_key` only lets ESTOP through; only the `reset_safety` service
-/// releases it.
+/// While engaged, `set_motion_key` only lets ESTOP through and cmd_vel is dropped without
+/// sending anything; only the `reset_safety` service releases it.
 ///
 /// Nothing triggers it yet (low battery and JOINT_TEMP overheat are both still TODO), so in
 /// practice it is never engaged.
-/// Also, unlike the reference implementation, cmd_vel and set_policy_mode are **not** gated
-/// by it.
+/// Also, unlike the reference implementation, set_policy_mode is **not** gated by it.
 ///
 /// Every state change is published on the latched `safety_locked` topic (see
 /// [`SafetyLock::new`]); `Default` builds one without a publisher, for tests.
