@@ -1,5 +1,5 @@
 use rclrs::*;
-use ros_env::std_srvs::srv::{Trigger, Trigger_Request, Trigger_Response};
+use ros_env::std_srvs::srv::{SetBool, SetBool_Request, SetBool_Response};
 use ros_env::syncai_common::srv::{
     SetMotionKey, SetMotionKey_Request, SetMotionKey_Response, SetPolicyMode,
     SetPolicyMode_Request, SetPolicyMode_Response, SetSpeedScale, SetSpeedScale_Request,
@@ -19,7 +19,7 @@ pub struct Services {
     _set_policy: WorkerService<SetPolicyMode, ServiceContext>,
     _set_motion_key: WorkerService<SetMotionKey, ServiceContext>,
     _set_speed_scale: WorkerService<SetSpeedScale, ServiceContext>,
-    _reset_safety: WorkerService<Trigger, ServiceContext>,
+    _set_safety_lock: WorkerService<SetBool, ServiceContext>,
 }
 
 /// Payload of the services worker; every callback receives `&mut ServiceContext`.
@@ -61,24 +61,10 @@ impl Services {
                     set_speed_scale(&ctx.velocity_scale, &ctx.logger, req)
                 },
             )?,
-            _reset_safety: worker.create_service::<Trigger, _>(
-                "reset_safety",
-                |ctx: &mut ServiceContext, _req: Trigger_Request| {
-                    if ctx.safety.release() {
-                        log_info!(
-                            &ctx.logger,
-                            "[Safety] Safety lock released; control restored"
-                        );
-                        Trigger_Response {
-                            success: true,
-                            message: "Safety lock released. Remote control restored.".into(),
-                        }
-                    } else {
-                        Trigger_Response {
-                            success: true,
-                            message: "System was not locked.".into(),
-                        }
-                    }
+            _set_safety_lock: worker.create_service::<SetBool, _>(
+                "set_safety_lock",
+                |ctx: &mut ServiceContext, req: SetBool_Request| {
+                    set_safety_lock(&ctx.safety, &ctx.logger, req.data)
                 },
             )?,
             _worker: worker,
@@ -89,7 +75,7 @@ impl Services {
 fn set_motion_key(command: &CommandLink, safety: &SafetyLock, key: &str) -> SetMotionKey_Response {
     let response = |success: bool, message: String| SetMotionKey_Response { success, message };
 
-    // While locked only the emergency stop passes; unlock with reset_safety, not a motion key
+    // While locked only the emergency stop passes; unlock with set_safety_lock, not a motion key
     if safety.is_engaged() && key != protocol::ESTOP_KEY {
         return response(false, "LOCKED".into());
     }
@@ -104,6 +90,30 @@ fn set_motion_key(command: &CommandLink, safety: &SafetyLock, key: &str) -> SetM
             }
         }
         None => response(false, format!("Unknown motion key '{key}'")),
+    }
+}
+
+/// `true` engages the lock, `false` releases it. Engaging only blocks control; unlike
+/// `SafetyLock::trigger` it sends no lie-down command. Setting the state it is already in is not
+/// an error, so `success` is always true and `message` says whether anything changed.
+fn set_safety_lock(safety: &SafetyLock, logger: &Logger, lock: bool) -> SetBool_Response {
+    let message = if lock {
+        if safety.engage() {
+            log_warn!(logger, "[Safety] Safety lock engaged; control blocked");
+            "Safety lock engaged. Remote control blocked."
+        } else {
+            "System was already locked."
+        }
+    } else if safety.release() {
+        log_info!(logger, "[Safety] Safety lock released; control restored");
+        "Safety lock released. Remote control restored."
+    } else {
+        "System was not locked."
+    };
+
+    SetBool_Response {
+        success: true,
+        message: message.into(),
     }
 }
 
@@ -223,5 +233,40 @@ mod tests {
         assert!(!safety.release());
         assert!(set_motion_key(&command, &safety, "1").success);
         assert_eq!(recv(&listener), "MODE C\n");
+    }
+
+    #[test]
+    fn set_safety_lock_toggles_without_sending_commands() {
+        let (command, listener) = loopback_link();
+        let safety = SafetyLock::default();
+        let logger = Logger::default();
+
+        let resp = set_safety_lock(&safety, &logger, false);
+        assert!(resp.success);
+        assert_eq!(resp.message, "System was not locked.");
+        assert!(!safety.is_engaged());
+
+        let resp = set_safety_lock(&safety, &logger, true);
+        assert!(resp.success);
+        assert_eq!(resp.message, "Safety lock engaged. Remote control blocked.");
+        assert!(safety.is_engaged());
+
+        let resp = set_safety_lock(&safety, &logger, true);
+        assert!(resp.success);
+        assert_eq!(resp.message, "System was already locked.");
+        assert!(safety.is_engaged());
+
+        // Engaging from outside sends no lie-down, but still gates motion keys
+        assert!(!set_motion_key(&command, &safety, "1").success);
+        assert_nothing_received(&listener);
+
+        let resp = set_safety_lock(&safety, &logger, false);
+        assert!(resp.success);
+        assert_eq!(
+            resp.message,
+            "Safety lock released. Remote control restored."
+        );
+        assert!(!safety.is_engaged());
+        assert_nothing_received(&listener);
     }
 }
