@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<!--
+  A messages-only stand-in for livox_ros_driver2, for developing this repo on its own (Dev
+  Container and CI). The real package builds the Livox driver too, which needs Livox-SDK2 and PCL;
+  this package needs nothing but rosidl. It carries the upstream .msg files of the same tag that
+  SyncAI-Robot-Workspace pins (import_livox_msgs.sh fetches them), so the type it generates is
+  the one the real driver publishes. SyncAI-Robot-Workspace builds the real package and never
+  uses this one.
+-->
+<package format="3">
+  <name>livox_ros_driver2</name>
+  <version>1.2.6</version>
+  <description>livox_ros_driver2 messages only (Dev Container stand-in)</description>
+  <maintainer email="andy_tseng@syncrobotic.com">andy_tseng</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>rosidl_default_generators</buildtool_depend>
+  <depend>std_msgs</depend>
+  <exec_depend>rosidl_default_runtime</exec_depend>
+  <member_of_group>rosidl_interface_packages</member_of_group>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

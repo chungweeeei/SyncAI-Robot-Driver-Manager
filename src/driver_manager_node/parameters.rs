@@ -2,7 +2,9 @@ use rclrs::*;
 use std::error::Error;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+use std::time::Duration;
 
+use super::health::Thresholds;
 use super::protocol::VelocityGains;
 
 /// Per-direction cmd_vel -> actual velocity correction gains.
@@ -128,6 +130,76 @@ impl UdpConfig {
             &self.command_target_ip.get(),
             self.command_target_port.get(),
         )
+    }
+}
+
+/// The sensor monitor's report period and per-stream timeouts, in seconds. Read once when the
+/// monitor thread starts, so they are read-only.
+pub struct MonitorConfig {
+    pub report_period: ReadOnlyParameter<f64>,
+    pub telemetry_timeout: ReadOnlyParameter<f64>,
+    pub lidar_timeout: ReadOnlyParameter<f64>,
+    pub camera_timeout: ReadOnlyParameter<f64>,
+    pub command_idle: ReadOnlyParameter<f64>,
+}
+
+impl MonitorConfig {
+    pub fn declare(node: &Node) -> Result<Self, DeclarationError> {
+        let seconds = |name: &str, default: f64, description: &str| {
+            node.declare_parameter(name)
+                .default(default)
+                // A zero period would spin the monitor thread; a zero timeout would read every
+                // stream as STALE between two messages
+                .range(ParameterRange {
+                    lower: Some(0.1),
+                    upper: None,
+                    step: None,
+                })
+                .description(description)
+                .read_only()
+        };
+
+        Ok(Self {
+            report_period: seconds(
+                "monitor_report_period",
+                5.0,
+                "seconds between two sensor status tables on stdout",
+            )?,
+            telemetry_timeout: seconds(
+                "monitor_telemetry_timeout",
+                1.0,
+                "seconds without a telemetry datagram before telemetry reads STALE",
+            )?,
+            lidar_timeout: seconds(
+                "monitor_lidar_timeout",
+                0.5,
+                "seconds without livox/lidar or livox/imu before the lidar reads STALE",
+            )?,
+            camera_timeout: seconds(
+                "monitor_camera_timeout",
+                1.0,
+                "seconds without image_raw/compressed before the camera reads STALE",
+            )?,
+            command_idle: seconds(
+                "monitor_command_idle",
+                1.0,
+                "seconds without a sent command before the command link reads IDLE",
+            )?,
+        })
+    }
+
+    pub fn report_period(&self) -> Duration {
+        Duration::from_secs_f64(self.report_period.get())
+    }
+
+    pub fn thresholds(&self) -> Thresholds {
+        let seconds = |p: &ReadOnlyParameter<f64>| Duration::from_secs_f64(p.get());
+        Thresholds {
+            telemetry_timeout: seconds(&self.telemetry_timeout),
+            lidar_timeout: seconds(&self.lidar_timeout),
+            camera_timeout: seconds(&self.camera_timeout),
+            command_idle: seconds(&self.command_idle),
+        }
     }
 }
 

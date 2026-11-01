@@ -10,6 +10,8 @@
   <depend>rclrs</depend>
   <depend>rosidl_runtime_rs</depend>
   <depend>syncai_common</depend>
+  <!-- livox/lidar's CustomMsg, subscribed by the sensor monitor -->
+  <depend>livox_ros_driver2</depend>
   <depend>geometry_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>

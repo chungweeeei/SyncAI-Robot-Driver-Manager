@@ -167,7 +167,10 @@ mod tests {
             .set_read_timeout(Some(Duration::from_secs(1)))
             .unwrap();
         let session = UdpSession::connect(listener.local_addr().unwrap()).unwrap();
-        (CommandLink::new(session, Logger::default()), listener)
+        (
+            CommandLink::new(session, Arc::default(), Logger::default()),
+            listener,
+        )
     }
 
     fn recv(listener: &UdpSocket) -> String {

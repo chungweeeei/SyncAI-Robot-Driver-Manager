@@ -6,7 +6,9 @@ and the quadruped robot's low-level controller (gait controller). It is a port o
 must stay identical to the C++ version** (node name, executable name, parameter names, topics,
 message types, QoS, service names): `syncai_robot_state` and `syncai_backend` both depend on it.
 When behaviour is in doubt, the C++ version is authoritative. Deliberate exceptions: the added
-`safety_locked` topic, and `set_safety_lock` (`std_srvs/SetBool`), which replaces `reset_safety`.
+`safety_locked` topic, `set_safety_lock` (`std_srvs/SetBool`), which replaces `reset_safety`, and
+the sensor monitor (subscriptions to `livox/lidar`, `livox/imu`, `image_raw/compressed`, a status
+table on stdout, five `monitor_*` parameters) — it adds readers only, no published interface.
 
 **The repo root is the package itself** (`package.xml` and `Cargo.toml` are at the root); the
 Workspace pulls it into `src/syncai_driver_manager` with vcstool (replacing the C++ version).
@@ -33,6 +35,10 @@ docker exec syncai-ros2-rust bash -lc 'cd /workspace/src/syncai_driver_manager &
   colcon-ros-cargo.
 - If `syncai_common` is missing (a fresh volume), run
   `cd /workspace && vcs import < src/syncai_driver_manager/interface.repos` in the container.
+- If `livox_ros_driver2` is missing (any volume created before the sensor monitor), run
+  `src/syncai_driver_manager/.devcontainer/livox_msgs/import_livox_msgs.sh /workspace`. It is a
+  messages-only stand-in (the real driver needs Livox-SDK2 + PCL); keep its version equal to the
+  Workspace's `third-party.repos` pin.
 - Warnings from `/opt/ros2_rust_underlay/...` (rclrs itself) are not ours; ignore them.
 - Before finishing, build / clippy / fmt must have zero warnings and all unit tests must pass.
 
@@ -52,16 +58,20 @@ docker exec syncai-ros2-rust bash -lc 'cd /workspace/src/syncai_driver_manager &
 | File | Responsibility |
 | --- | --- |
 | `mod.rs` | Wiring: parameters → two UDP sockets → workers / services / telemetry thread |
-| `protocol.rs` | **Pure functions** for packet <-> struct; no sockets / Node / ROS message types; all unit tests live here |
+| `protocol.rs` | **Pure functions** for packet <-> struct; no sockets / Node / ROS message types; its unit tests live here |
 | `parameters.rs` | Velocity gains (`MandatoryParameter`, >= 0), UDP addresses (`ReadOnlyParameter`) |
 | `session.rs` | UDP sockets (telemetry `listen`, command `connect`) |
 | `command.rs` | `CommandLink` (sends ASCII commands), `SafetyLock` (no automatic trigger yet; `set_safety_lock` engages / releases it) |
 | `telemetry.rs` | `std::thread` that receives packets, parses them and publishes ROS messages |
+| `health.rs` | **Pure** sensor bookkeeping (`SensorHealth`: rates, statuses, the stdout table); unit tested |
+| `monitor.rs` | Lidar / camera subscriptions (counted only) and the `monitor` thread that prints the table |
 | `publishers.rs` / `subscriber.rs` / `service.rs` | ROS interfaces |
 
 Threads: `cmd_vel` has one rclrs Worker, and the four services share one Worker (equivalent to the
 C++ version's two MutuallyExclusive callback groups; the two workers run in parallel). Telemetry has
-its own `std::thread`. New packet parsing logic goes in `protocol.rs`, with unit tests.
+its own `std::thread`. The lidar / camera subscriptions have a third Worker, and the status table
+its own `std::thread`; all of them write or read the shared `Arc<SensorHealth>`. New packet parsing
+logic goes in `protocol.rs`, with unit tests.
 
 ## rclrs pitfalls (all hit in practice)
 
