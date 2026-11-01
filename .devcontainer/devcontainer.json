@@ -39,9 +39,10 @@
     "ROS_DOMAIN_ID": "2",
     "RMW_IMPLEMENTATION": "rmw_cyclonedds_cpp"
   },
-  // Pull the shared syncai_common messages next to this package (skipped if already there),
-  // then build once so rust-analyzer finds the generated message crates
-  "postCreateCommand": "cd /workspace && vcs import --skip-existing < src/syncai_driver_manager/interface.repos && colcon build --symlink-install",
+  // Pull the shared syncai_common messages and the messages-only livox_ros_driver2 next to this
+  // package (each skipped if already there), then build once so rust-analyzer finds the
+  // generated message crates
+  "postCreateCommand": "cd /workspace && vcs import --skip-existing < src/syncai_driver_manager/interface.repos && src/syncai_driver_manager/.devcontainer/livox_msgs/import_livox_msgs.sh /workspace && colcon build --symlink-install",
 
   // Both the container and the VS Code server run as ros (uid/gid 1000), not root
   "containerUser": "ros",

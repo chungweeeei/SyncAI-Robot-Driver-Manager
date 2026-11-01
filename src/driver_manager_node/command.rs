@@ -1,10 +1,11 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use rclrs::*;
 use ros_env::std_msgs::msg::Bool;
 
+use super::health::SensorHealth;
 use super::protocol;
 use super::session::UdpSession;
 
@@ -14,19 +15,27 @@ const LOG_THROTTLE: Duration = Duration::from_secs(1);
 ///
 /// UDP has no acknowledgement: a successful `send` only means the datagram reached the kernel,
 /// not that the controller received it. A dropped command is simply lost: nothing retries it
-/// and nothing notices.
+/// and nothing notices. Every send, and every local failure, is counted in `health` for the
+/// monitor's command row.
 pub struct CommandLink {
     session: UdpSession,
+    health: Arc<SensorHealth>,
     logger: Logger,
 }
 
 impl CommandLink {
-    pub fn new(session: UdpSession, logger: Logger) -> Self {
-        Self { session, logger }
+    pub fn new(session: UdpSession, health: Arc<SensorHealth>, logger: Logger) -> Self {
+        Self {
+            session,
+            health,
+            logger,
+        }
     }
 
     pub fn send(&self, command: &str) {
-        if let Err(e) = self.session.socket.send(command.as_bytes()) {
+        let result = self.session.socket.send(command.as_bytes());
+        self.health.record_command(result.is_ok());
+        if let Err(e) = result {
             log_warn!(
                 self.logger.throttle(LOG_THROTTLE),
                 "[Command] send {:?} to {:?} failed: {e}",

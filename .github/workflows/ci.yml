@@ -65,6 +65,13 @@ jobs:
           docker exec "$CONTAINER" bash -lc \
             'cd /workspace && vcs import < src/syncai_driver_manager/interface.repos'
 
+      # Messages only: the real livox_ros_driver2 needs Livox-SDK2 and PCL (see
+      # .devcontainer/livox_msgs/package.xml)
+      - name: Import livox_ros_driver2 messages
+        run: |
+          docker exec "$CONTAINER" bash -lc \
+            'src=/workspace/src/syncai_driver_manager; "$src/.devcontainer/livox_msgs/import_livox_msgs.sh" /workspace'
+
       - name: colcon build
         run: |
           docker exec "$CONTAINER" bash -lc \

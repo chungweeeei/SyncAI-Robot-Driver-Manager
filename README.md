@@ -117,6 +117,8 @@ cargo test --target-dir /workspace/build/.clippy
 │       ├── session.rs      # UDP sockets
 │       ├── command.rs      # send commands to the controller, safety lock
 │       ├── telemetry.rs    # receive telemetry and publish it as ROS messages
+│       ├── health.rs       # pure sensor bookkeeping: rates, statuses, the stdout table
+│       ├── monitor.rs      # lidar / camera subscriptions + the status-table thread
 │       ├── publishers.rs   # imu / motor_states / battery_state / mode / safety_locked
 │       ├── subscriber.rs   # cmd_vel -> AXES
 │       └── service.rs      # set_motion_key / set_policy_mode / set_speed_scale / set_safety_lock
@@ -124,6 +126,7 @@ cargo test --target-dir /workspace/build/.clippy
 │   # Only for developing this repo on its own; SyncAI-Robot-Workspace does not use these
 ├── interface.repos         # vcstool list: where the shared syncai_common messages come from
 └── .devcontainer/          # Dockerfile + devcontainer.json
+    └── livox_msgs/         # messages-only livox_ros_driver2 + import_livox_msgs.sh
 ```
 
 The workspace inside the container looks like this, matching the paths in SyncAI-Robot-Workspace:
@@ -133,6 +136,7 @@ The workspace inside the container looks like this, matching the paths in SyncAI
 ├── build/ install/ log/ .cargo/
 └── src/
     ├── syncai_common/          # shared messages, vcs-imported by postCreateCommand
+    ├── livox_ros_driver2/      # messages only, from .devcontainer/livox_msgs (postCreateCommand)
     └── syncai_driver_manager/  # bind mount: this repo
 ```
 
@@ -149,7 +153,8 @@ repositories:
     version: main
 ```
 
-`syncai_common` comes from the Workspace's own `interface.repos`; this repo's `interface.repos` and
+`syncai_common` comes from the Workspace's own `interface.repos` and `livox_ros_driver2` from its
+`third-party.repos` (the real driver, built against Livox-SDK2); this repo's `interface.repos` and
 `.devcontainer/` are not used there (colcon only looks at `package.xml`). The Workspace image needs
 the Rust toolchain, `colcon-ros-cargo` and the rclrs dependencies.
 
@@ -168,9 +173,39 @@ C++ README is authoritative.
 | Direction | Interface |
 | --- | --- |
 | Publishes | `imu` (`syncai_common/IMUState`, SensorData), `motor_states` (`syncai_common/MotorStates`, SensorData), `battery_state` (`sensor_msgs/BatteryState`, reliable depth 10), `mode` (`std_msgs/Int32MultiArray`, reliable depth 10), `safety_locked` (`std_msgs/Bool`, reliable + transient local depth 1; published at startup and whenever the safety lock changes; **Rust-only addition**, not in the C++ version) |
-| Subscribes | `cmd_vel` (`geometry_msgs/Twist`) → `AXES vx vy wz`; dropped (nothing sent) while the safety lock is engaged |
+| Subscribes | `cmd_vel` (`geometry_msgs/Twist`) → `AXES vx vy wz`; dropped (nothing sent) while the safety lock is engaged. For the sensor monitor only (**Rust-only addition**, counted, never used): `livox/lidar` (`livox_ros_driver2/CustomMsg`), `livox/imu` (`sensor_msgs/Imu`), `image_raw/compressed` (`sensor_msgs/CompressedImage`), all best-effort |
 | Services | `set_motion_key`, `set_policy_mode`, `set_speed_scale`, `set_safety_lock` (`std_srvs/SetBool`: `true` engages the safety lock without sending any command, `false` releases it; **replaces the C++ version's `reset_safety`** (`std_srvs/Trigger`), so callers of `reset_safety` must switch) |
-| Parameters | `telemetry_recv_ip/port`, `command_target_ip/port` (read-only), `scale_fwd` / `scale_back` / `scale_left` / `scale_right` / `scale_turn_l` / `scale_turn_r` (>= 0, changeable at runtime with `ros2 param set` or `set_speed_scale`; never written back to the YAML) |
+| Parameters | `telemetry_recv_ip/port`, `command_target_ip/port` (read-only), `scale_fwd` / `scale_back` / `scale_left` / `scale_right` / `scale_turn_l` / `scale_turn_r` (>= 0, changeable at runtime with `ros2 param set` or `set_speed_scale`; never written back to the YAML), `monitor_report_period` / `monitor_telemetry_timeout` / `monitor_lidar_timeout` / `monitor_camera_timeout` / `monitor_command_idle` (seconds, read-only; see below) |
+
+### Sensor status on stdout
+
+The node watches four things and prints them as one table every `monitor_report_period` seconds
+(5 s by default), so attaching to the `driver_manager` pane answers "is everything alive?" at a
+glance:
+
+```
+[Monitor] Sensor status (uptime 00:12:34)
+  SENSOR     STATUS        RATE       AGE  DETAIL
+  telemetry  OK         19.5 Hz    0.02 s  from 192.168.1.120:50051, parse warnings 0 (total 0)
+  command    IDLE        0.0 Hz   12.30 s  sent 1234, failed 0, safety_lock off
+  lidar      OK         10.0 Hz    0.05 s  points 19968, imu OK 200.0 Hz
+  camera     STALE       0.0 Hz    3.21 s  last frame 98 KB
+```
+
+| Row | Source | Statuses |
+| --- | --- | --- |
+| `telemetry` | datagrams on the telemetry socket | `NO DATA` (never), `OK`, `STALE` (none for `monitor_telemetry_timeout`) |
+| `command` | sends on the command socket | `IDLE` (nothing sent for `monitor_command_idle`: normal while nobody drives), `OK`, `ERROR` (a send failed within the last 2 s, e.g. ICMP port unreachable). UDP has no ack, so the controller can never be shown as down from this side |
+| `lidar` | `livox/lidar` and `livox/imu` | the worse of the two (they arrive on different UDP ports from the MID360): `NO DATA`, `OK`, `STALE` (`monitor_lidar_timeout`) |
+| `camera` | `image_raw/compressed` from `syncai_camera_feeder` | `NO DATA`, `OK`, `STALE` (`monitor_camera_timeout`) |
+
+Rates are counts over the last 2 s. A change of status is logged the moment it happens (checked
+every 0.5 s): `WARN` into `STALE` / `NO DATA` / `ERROR`, `INFO` on recovery; `OK` <-> `IDLE` on the
+command row is not logged. The table replaces the old once-a-second `[Telemetry] Received N bytes`
+line.
+
+Watching the lidar and camera costs a deserialised copy of every message in this process (a ~20k
+point CustomMsg at 10 Hz, a JPEG at 30 Hz): rclrs has no serialized subscription to avoid it.
 
 ### Threads
 
@@ -179,6 +214,8 @@ C++ README is authoritative.
 | `cmd_vel` | its own rclrs Worker | `cmd_vel_cb_group_` |
 | The four services | one shared Worker, run one at a time | `services_cb_group_` |
 | Telemetry receive | its own `std::thread`, outside the executor | same |
+| Lidar / camera subscriptions | one rclrs Worker of their own | — (Rust-only) |
+| Status table | its own `std::thread` (`monitor`) | — (Rust-only) |
 
 Everything shared across workers / threads (velocity gains, the safety lock, the command socket) is
 thread-safe: the gains are ROS parameters, the safety lock is an `AtomicBool`, and the socket is an
@@ -209,7 +246,7 @@ thread-safe: the gains are ROS parameters, the safety lock is an `AtomicBool`, a
 cd /workspace/src/syncai_driver_manager && cargo test --target-dir /workspace/build/.clippy
 ```
 
-`protocol.rs` is pure functions (packet <-> struct), so the unit tests need neither a ROS
+`protocol.rs` and `health.rs` are pure functions, so their unit tests need neither a ROS
 environment nor the robot. For end-to-end tests use loopback
 (`-p telemetry_recv_ip:=127.0.0.1 -p command_target_ip:=127.0.0.1` plus different ports) and a
 separate `ROS_DOMAIN_ID`, and **never send commands to `192.168.1.120`**: that is the real robot's

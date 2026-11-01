@@ -11,6 +11,7 @@ use ros_env::sensor_msgs::msg::BatteryState;
 use ros_env::std_msgs::msg::{Header, Int32MultiArray};
 use ros_env::syncai_common::msg::{IMUState, MotorState, MotorStates};
 
+use super::health::SensorHealth;
 use super::protocol::{self, Battery, ChargeState, JOINT_NAMES, NUM_DOF, Sections, Telemetry};
 use super::publishers::Publishers;
 use super::session::UdpSession;
@@ -30,6 +31,7 @@ impl TelemetryWorker {
     pub fn spawn(
         session: UdpSession,
         publishers: Publishers,
+        health: Arc<SensorHealth>,
         clock: Clock,
         logger: Logger,
     ) -> io::Result<Self> {
@@ -40,6 +42,7 @@ impl TelemetryWorker {
             let running = Arc::clone(&running);
             let telemetry = TelemetryLoop {
                 publishers,
+                health,
                 clock,
                 logger,
             };
@@ -64,6 +67,7 @@ impl Drop for TelemetryWorker {
 
 struct TelemetryLoop {
     publishers: Publishers,
+    health: Arc<SensorHealth>,
     clock: Clock,
     logger: Logger,
 }
@@ -96,15 +100,12 @@ impl TelemetryLoop {
                 }
             };
 
-            // Whether or not any section parses, this line is the quickest proof that the UDP
-            // link is alive
-            log_info!(
-                self.logger.throttle(LOG_THROTTLE),
-                "[Telemetry] Received {n} bytes from {from}"
-            );
-
+            // Counted whether or not any section parses: an arriving datagram is the proof that
+            // the UDP link is alive, and the monitor's table shows it (with its source address)
+            // in place of the per-second "Received N bytes" line this used to log
             let line = String::from_utf8_lossy(&buf[..n]);
             let (telemetry, warnings) = protocol::parse_telemetry(&line);
+            self.health.record_telemetry(from, !warnings.is_empty());
             for warning in &warnings {
                 log_warn!(
                     self.logger.throttle(LOG_THROTTLE),
