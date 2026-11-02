@@ -5,7 +5,8 @@
 //!
 //! The gait controller speaks ASCII in both directions:
 //!
-//! * Commands (out): `AXES <vx> <vy> <wz>\n`, `MODE <char>\n`, `MODE <uint>\n`, `ESTOP\n`
+//! * Commands (out): `AXES <vx> <vy> <wz>\n`, `MODE <char>\n`, `MODE <uint>\n`, `ESTOP\n`,
+//!   `RESET_SAFETY\n`
 //! * Telemetry (in): one line per datagram, made of whitespace-separated sections. Each section
 //!   is a keyword followed by its values, up to the next keyword; a datagram may carry any
 //!   subset of sections:
@@ -74,6 +75,16 @@ const BMS_IDLE_CURRENT: f32 = 0.1;
 
 /// Lies the robot down; sent when the safety lock is triggered
 pub const LIE_DOWN_COMMAND: &str = "MODE X\n";
+
+/// Clears the **controller's** own safety lock (sent by `set_safety_lock` with `false`).
+///
+/// The controller engages that lock on ESTOP, on `MODE R` (damping, motion key 3), when it judges
+/// it has lost control, and when a StandUp output is rejected; while it holds, every cycle is
+/// forced to JointDamping, and in ROS UDP mode nothing but this command releases it. It is a
+/// different lock from this node's `SafetyLock`, which only gates what this node
+/// sends. After the reset the controller waits for a stand command (motion key 0): it does not
+/// stand up by itself.
+pub const RESET_SAFETY_COMMAND: &str = "RESET_SAFETY\n";
 
 /// The emergency-stop motion key. It is not a MODE character, and it is the only key let
 /// through while the safety lock is engaged.

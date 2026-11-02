@@ -61,7 +61,7 @@ docker exec syncai-ros2-rust bash -lc 'cd /workspace/src/syncai_driver_manager &
 | `protocol.rs` | **Pure functions** for packet <-> struct; no sockets / Node / ROS message types; its unit tests live here |
 | `parameters.rs` | Velocity gains (`MandatoryParameter`, >= 0), UDP addresses (`ReadOnlyParameter`) |
 | `session.rs` | UDP sockets (telemetry `listen`, command `connect`) |
-| `command.rs` | `CommandLink` (sends ASCII commands), `SafetyLock` (no automatic trigger yet; `set_safety_lock` engages / releases it) |
+| `command.rs` | `CommandLink` (sends ASCII commands), `SafetyLock` (no automatic trigger yet; `set_safety_lock` engages / releases it, and its release also sends the controller `RESET_SAFETY`) |
 | `telemetry.rs` | `std::thread` that receives packets, parses them and publishes ROS messages |
 | `health.rs` | **Pure** sensor bookkeeping (`SensorHealth`: rates, statuses, the stdout table); unit tested |
 | `monitor.rs` | Lidar / camera subscriptions (counted only) and the `monitor` thread that prints the table |
