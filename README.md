@@ -174,7 +174,7 @@ C++ README is authoritative.
 | --- | --- |
 | Publishes | `imu` (`syncai_common/IMUState`, SensorData), `motor_states` (`syncai_common/MotorStates`, SensorData), `battery_state` (`sensor_msgs/BatteryState`, reliable depth 10), `mode` (`std_msgs/Int32MultiArray`, reliable depth 10), `safety_locked` (`std_msgs/Bool`, reliable + transient local depth 1; published at startup and whenever the safety lock changes; **Rust-only addition**, not in the C++ version) |
 | Subscribes | `cmd_vel` (`geometry_msgs/Twist`) → `AXES vx vy wz`; dropped (nothing sent) while the safety lock is engaged. For the sensor monitor only (**Rust-only addition**, counted, never used): `livox/lidar` (`livox_ros_driver2/CustomMsg`), `livox/imu` (`sensor_msgs/Imu`), `image_raw/compressed` (`sensor_msgs/CompressedImage`), all best-effort |
-| Services | `set_motion_key`, `set_policy_mode`, `set_speed_scale`, `set_safety_lock` (`std_srvs/SetBool`: `true` engages the safety lock without sending any command, `false` releases it; **replaces the C++ version's `reset_safety`** (`std_srvs/Trigger`), so callers of `reset_safety` must switch) |
+| Services | `set_motion_key`, `set_policy_mode`, `set_speed_scale`, `set_safety_lock` (`std_srvs/SetBool`: `true` engages the safety lock without sending any command, `false` releases it **and always sends `RESET_SAFETY`**, which clears the controller's own lock; **replaces the C++ version's `reset_safety`** (`std_srvs/Trigger`), so callers of `reset_safety` must switch) |
 | Parameters | `telemetry_recv_ip/port`, `command_target_ip/port` (read-only), `scale_fwd` / `scale_back` / `scale_left` / `scale_right` / `scale_turn_l` / `scale_turn_r` (>= 0, changeable at runtime with `ros2 param set` or `set_speed_scale`; never written back to the YAML), `monitor_report_period` / `monitor_telemetry_timeout` / `monitor_lidar_timeout` / `monitor_camera_timeout` / `monitor_command_idle` (seconds, read-only; see below) |
 
 ### Sensor status on stdout
@@ -232,6 +232,14 @@ thread-safe: the gains are ROS parameters, the safety lock is an `AtomicBool`, a
 * **`reset_safety` is replaced by `set_safety_lock` (`std_srvs/SetBool`).** It can also engage the
   lock from outside (`true`, no lie-down command sent), not only release it (`false`). While the
   lock is engaged, cmd_vel is dropped as well, not only motion keys other than ESTOP.
+* **Releasing (`false`) always sends `RESET_SAFETY` to the controller**, whether or not this node's
+  lock was engaged. The controller keeps a lock of its own, engaged by ESTOP (key 4), damping
+  (key 3, `MODE R`), a lost-control judgement or a rejected StandUp output; while it holds, every
+  cycle is forced to damping, and over ROS UDP only `RESET_SAFETY` releases it — without it the
+  robot stayed in damping until the controller was restarted. After the reset the controller
+  waits for a stand command (key 0); it does not stand up by itself. On an unlocked controller the
+  command only zeroes the velocity it holds. This node does not yet read the controller's
+  `SAFETY_LOCKED` telemetry, so `safety_locked` still shows this node's lock only.
 * **Failed command sends are logged** (throttled to once a second); the C++ version discards the
   return value of `sendto()`.
 * **There is no SIGINT handler.** rclrs does not handle signals, so Ctrl-C / `ros2 launch` shutdown

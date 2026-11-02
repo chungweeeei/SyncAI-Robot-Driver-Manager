@@ -64,7 +64,7 @@ impl Services {
             _set_safety_lock: worker.create_service::<SetBool, _>(
                 "set_safety_lock",
                 |ctx: &mut ServiceContext, req: SetBool_Request| {
-                    set_safety_lock(&ctx.safety, &ctx.logger, req.data)
+                    set_safety_lock(&ctx.command, &ctx.safety, &ctx.logger, req.data)
                 },
             )?,
             _worker: worker,
@@ -96,7 +96,19 @@ fn set_motion_key(command: &CommandLink, safety: &SafetyLock, key: &str) -> SetM
 /// `true` engages the lock, `false` releases it. Engaging only blocks control; unlike
 /// `SafetyLock::trigger` it sends no lie-down command. Setting the state it is already in is not
 /// an error, so `success` is always true and `message` says whether anything changed.
-fn set_safety_lock(safety: &SafetyLock, logger: &Logger, lock: bool) -> SetBool_Response {
+///
+/// Releasing also sends `RESET_SAFETY`, **every time**, whether or not this node's lock was
+/// engaged: the controller locks itself (ESTOP, damping, a lost-control judgement) without this
+/// node knowing, and before this nothing on the ROS side could release that lock, so the robot sat
+/// in damping until the controller was restarted. On a controller that is not locked the command
+/// is benign: RL / MPC / lying down ignore the target it sets, and it only zeroes the velocity the
+/// controller holds, which the next cmd_vel restores.
+fn set_safety_lock(
+    command: &CommandLink,
+    safety: &SafetyLock,
+    logger: &Logger,
+    lock: bool,
+) -> SetBool_Response {
     let message = if lock {
         if safety.engage() {
             log_warn!(logger, "[Safety] Safety lock engaged; control blocked");
@@ -104,11 +116,20 @@ fn set_safety_lock(safety: &SafetyLock, logger: &Logger, lock: bool) -> SetBool_
         } else {
             "System was already locked."
         }
-    } else if safety.release() {
-        log_info!(logger, "[Safety] Safety lock released; control restored");
-        "Safety lock released. Remote control restored."
     } else {
-        "System was not locked."
+        // Reset the controller first, so no cmd_vel let through by the release below reaches a
+        // controller that is still forcing damping
+        command.send(protocol::RESET_SAFETY_COMMAND);
+        log_info!(
+            logger,
+            "[Safety] RESET_SAFETY sent; the controller waits for a stand command (motion key 0)"
+        );
+        if safety.release() {
+            log_info!(logger, "[Safety] Safety lock released; control restored");
+            "Safety lock released and controller reset. Send motion key 0 to stand up."
+        } else {
+            "Controller reset. Send motion key 0 to stand up."
+        }
     };
 
     SetBool_Response {
@@ -239,22 +260,28 @@ mod tests {
     }
 
     #[test]
-    fn set_safety_lock_toggles_without_sending_commands() {
+    fn set_safety_lock_engages_silently_and_releases_with_a_controller_reset() {
         let (command, listener) = loopback_link();
         let safety = SafetyLock::default();
         let logger = Logger::default();
 
-        let resp = set_safety_lock(&safety, &logger, false);
+        // Releasing while this node is not locked still resets the controller, which may have
+        // locked itself
+        let resp = set_safety_lock(&command, &safety, &logger, false);
         assert!(resp.success);
-        assert_eq!(resp.message, "System was not locked.");
+        assert_eq!(
+            resp.message,
+            "Controller reset. Send motion key 0 to stand up."
+        );
         assert!(!safety.is_engaged());
+        assert_eq!(recv(&listener), "RESET_SAFETY\n");
 
-        let resp = set_safety_lock(&safety, &logger, true);
+        let resp = set_safety_lock(&command, &safety, &logger, true);
         assert!(resp.success);
         assert_eq!(resp.message, "Safety lock engaged. Remote control blocked.");
         assert!(safety.is_engaged());
 
-        let resp = set_safety_lock(&safety, &logger, true);
+        let resp = set_safety_lock(&command, &safety, &logger, true);
         assert!(resp.success);
         assert_eq!(resp.message, "System was already locked.");
         assert!(safety.is_engaged());
@@ -263,13 +290,14 @@ mod tests {
         assert!(!set_motion_key(&command, &safety, "1").success);
         assert_nothing_received(&listener);
 
-        let resp = set_safety_lock(&safety, &logger, false);
+        let resp = set_safety_lock(&command, &safety, &logger, false);
         assert!(resp.success);
         assert_eq!(
             resp.message,
-            "Safety lock released. Remote control restored."
+            "Safety lock released and controller reset. Send motion key 0 to stand up."
         );
         assert!(!safety.is_engaged());
+        assert_eq!(recv(&listener), "RESET_SAFETY\n");
         assert_nothing_received(&listener);
     }
 }
