@@ -119,7 +119,7 @@ cargo test --target-dir /workspace/build/.clippy
 │       ├── telemetry.rs    # receive telemetry and publish it as ROS messages
 │       ├── health.rs       # pure sensor bookkeeping: rates, statuses, the stdout table
 │       ├── monitor.rs      # lidar / camera subscriptions + the status-table thread
-│       ├── publishers.rs   # imu / motor_states / battery_state / mode / safety_locked
+│       ├── publishers.rs   # imu / motor_states (+ _low_rate) / battery_state / mode / safety_locked
 │       ├── subscriber.rs   # cmd_vel -> AXES
 │       └── service.rs      # set_motion_key / set_policy_mode / set_speed_scale / set_safety_lock
 │
@@ -172,7 +172,7 @@ C++ README is authoritative.
 
 | Direction | Interface |
 | --- | --- |
-| Publishes | `imu` (`syncai_common/IMUState`, SensorData), `motor_states` (`syncai_common/MotorStates`, SensorData), `battery_state` (`sensor_msgs/BatteryState`, reliable depth 10), `mode` (`std_msgs/Int32MultiArray`, reliable depth 10), `safety_locked` (`std_msgs/Bool`, reliable + transient local depth 1; published at startup and whenever the safety lock changes; **Rust-only addition**, not in the C++ version) |
+| Publishes | `imu` (`syncai_common/IMUState`, SensorData), `motor_states` (`syncai_common/MotorStates`, SensorData), `motor_states_low_rate` (the same messages thinned to 20 Hz, SensorData; what `syncai_robot_state` and the backend subscribe — `motor_states` stays at the telemetry rate, ~200 Hz), `battery_state` (`sensor_msgs/BatteryState`, reliable depth 10), `mode` (`std_msgs/Int32MultiArray`, reliable depth 10), `safety_locked` (`std_msgs/Bool`, reliable + transient local depth 1; published at startup and whenever the safety lock changes; **Rust-only addition**, not in the C++ version) |
 | Subscribes | `cmd_vel` (`geometry_msgs/Twist`) → `AXES vx vy wz`; dropped (nothing sent) while the safety lock is engaged. For the sensor monitor only (**Rust-only addition**, counted, never used): `livox/lidar` (`livox_ros_driver2/CustomMsg`), `livox/imu` (`sensor_msgs/Imu`), `image_raw/compressed` (`sensor_msgs/CompressedImage`), all best-effort |
 | Services | `set_motion_key`, `set_policy_mode`, `set_speed_scale`, `set_safety_lock` (`std_srvs/SetBool`: `true` engages the safety lock without sending any command, `false` releases it **and always sends `RESET_SAFETY`**, which clears the controller's own lock; **replaces the C++ version's `reset_safety`** (`std_srvs/Trigger`), so callers of `reset_safety` must switch) |
 | Parameters | `telemetry_recv_ip/port`, `command_target_ip/port` (read-only), `scale_fwd` / `scale_back` / `scale_left` / `scale_right` / `scale_turn_l` / `scale_turn_r` (>= 0, changeable at runtime with `ros2 param set` or `set_speed_scale`; never written back to the YAML), `monitor_report_period` / `monitor_telemetry_timeout` / `monitor_lidar_timeout` / `monitor_camera_timeout` / `monitor_command_idle` (seconds, read-only; see below) |

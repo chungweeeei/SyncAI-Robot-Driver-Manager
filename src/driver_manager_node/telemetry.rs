@@ -1,9 +1,10 @@
+use std::cell::Cell;
 use std::io;
 use std::net::UdpSocket;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rclrs::*;
 use ros_env::builtin_interfaces::msg::Time as TimeMsg;
@@ -19,6 +20,12 @@ use super::session::UdpSession;
 // Sleeps in the kernel's recv while idle, but wakes every 100 ms to check `running`
 const RECV_TIMEOUT: Duration = Duration::from_millis(100);
 const LOG_THROTTLE: Duration = Duration::from_secs(1);
+// motor_states arrives at the controller's telemetry rate, ~200 Hz, and every subscriber pays
+// for each message: syncai_robot_state folds it into a 1 Hz RobotState and the backend into a
+// joint pose for the console's 3D model, so both deserialised ~200 messages a second to keep
+// one. motor_states_low_rate carries every telemetry joint section that falls due on this
+// period (20 Hz) for them; motor_states itself keeps the full rate for anything that needs it.
+const MOTOR_STATES_LOW_RATE_PERIOD: Duration = Duration::from_millis(50);
 
 /// Handle to the telemetry receive thread. The thread owns the telemetry socket and the
 /// publishers; dropping the handle stops the thread and joins it, which also closes the socket.
@@ -45,6 +52,7 @@ impl TelemetryWorker {
                 health,
                 clock,
                 logger,
+                low_rate_due: Cell::new(None),
             };
             move || telemetry.run(&session.socket, &running)
         })?;
@@ -70,6 +78,9 @@ struct TelemetryLoop {
     health: Arc<SensorHealth>,
     clock: Clock,
     logger: Logger,
+    // When the next motor_states_low_rate message is due (None: send the next one). A Cell
+    // because the loop runs on &self; only the telemetry thread ever touches it.
+    low_rate_due: Cell<Option<Instant>>,
 }
 
 impl TelemetryLoop {
@@ -205,6 +216,13 @@ impl TelemetryLoop {
                 timestamp: self.timestamp_ns(),
                 states,
             };
+            if self.low_rate_is_due() {
+                self.publish(
+                    &self.publishers.motor_states_low_rate,
+                    msg.clone(),
+                    "motor_states_low_rate",
+                );
+            }
             self.publish(&self.publishers.motor_states, msg, "motor_states");
         }
 
@@ -214,6 +232,27 @@ impl TelemetryLoop {
                 ..Default::default()
             };
             self.publish(&self.publishers.mode, msg, "mode");
+        }
+    }
+
+    /// Whether this joint section goes out on motor_states_low_rate too. The deadline steps by
+    /// whole periods, not from the moment of sending, so jitter in the ~5 ms telemetry spacing
+    /// does not stretch every period to the sample after it (below 20 Hz); after a gap longer
+    /// than a period (no telemetry) it restarts from now rather than bursting to catch up.
+    fn low_rate_is_due(&self) -> bool {
+        let now = Instant::now();
+        match self.low_rate_due.get() {
+            Some(due) if now < due => false,
+            Some(due) if now - due < MOTOR_STATES_LOW_RATE_PERIOD => {
+                self.low_rate_due
+                    .set(Some(due + MOTOR_STATES_LOW_RATE_PERIOD));
+                true
+            }
+            _ => {
+                self.low_rate_due
+                    .set(Some(now + MOTOR_STATES_LOW_RATE_PERIOD));
+                true
+            }
         }
     }
 
