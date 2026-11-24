@@ -315,6 +315,7 @@ pub struct M20Parameters {
     pub max_vy: ReadOnlyParameter<f64>,
     pub max_wz: ReadOnlyParameter<f64>,
     pub cmd_timeout: ReadOnlyParameter<f64>,
+    pub battery_topic: ReadOnlyParameter<Arc<str>>,
 }
 
 impl M20Parameters {
@@ -366,6 +367,16 @@ impl M20Parameters {
                 0.3,
                 "seconds a cmd_vel is re-sent at 20 Hz before the M20 is sent a stop",
             )?,
+            // Absolute for the same reason as the monitor's M20 topics: the vendor's stack
+            // publishes it with no namespace
+            battery_topic: node
+                .declare_parameter("battery_topic")
+                .default(Arc::from("/BATTERY_DATA"))
+                .description(
+                    "Lynx M20: the vendor's drdds/msg/BatteryData topic, re-published as \
+                     battery_state",
+                )
+                .read_only()?,
         })
     }
 

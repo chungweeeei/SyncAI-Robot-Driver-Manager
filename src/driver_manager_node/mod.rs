@@ -1,6 +1,8 @@
 mod command;
 mod drive;
 mod health;
+mod m20_battery;
+mod m20_battery_forwarder;
 mod m20_link;
 mod m20_protocol;
 mod monitor;
@@ -20,6 +22,7 @@ use rclrs::*;
 use command::{CommandLink, SafetyLock};
 use drive::Drive;
 use health::SensorHealth;
+use m20_battery_forwarder::M20BatteryForwarder;
 use m20_link::M20Link;
 use monitor::{LidarTopics, MonitorWorker, SensorSubscriptions};
 use parameters::{
@@ -46,6 +49,7 @@ use telemetry::TelemetryWorker;
 /// | The four services | One shared Worker: serialized, but concurrent with cmd_vel    |
 /// | Telemetry receive | Its own std::thread, entirely outside the executor (G23 only) |
 /// | M20 send / recv   | Two std::threads in `M20Link` (M20 only)                      |
+/// | M20 battery       | Its own Worker: /BATTERY_DATA -> battery_state (M20 only)     |
 /// | Lidar / camera    | One Worker, only counting messages for the monitor            |
 /// | Status table      | Its own std::thread (`monitor`), reading `SensorHealth`       |
 ///
@@ -59,6 +63,8 @@ pub struct DriverManagerNode {
     _monitor: MonitorWorker,
     /// G23 only: the M20 link receives on its own socket and publishes nothing
     _telemetry: Option<TelemetryWorker>,
+    /// M20 only: its battery_state, which the G23's comes with `_telemetry`
+    _m20_battery: Option<M20BatteryForwarder>,
     _sensor_subscriptions: SensorSubscriptions,
     _subscribers: Subscribers,
     _services: Services,
@@ -179,6 +185,17 @@ impl DriverManagerNode {
             None => None,
         };
 
+        // battery_state on both robots, from whichever source the robot has: on a G23 the
+        // telemetry thread's BMS packet (Publishers above), on an M20 the vendor's topic
+        let m20_battery = match &endpoint {
+            Endpoint::G23(_) => None,
+            Endpoint::M20(m20_parameters) => {
+                let topic = m20_parameters.battery_topic.get();
+                log_info!(node.logger(), "[DriverManagerNode] M20: battery_state from {topic}");
+                Some(M20BatteryForwarder::create(&node, &topic)?)
+            }
+        };
+
         let lidar_cloud_topic = monitor_config.lidar_topic.get();
         let lidar_imu_topic = monitor_config.imu_topic.get();
         let lidar_topics = LidarTopics {
@@ -211,6 +228,7 @@ impl DriverManagerNode {
         Ok(Self {
             _monitor: monitor,
             _telemetry: telemetry,
+            _m20_battery: m20_battery,
             _sensor_subscriptions: sensor_subscriptions,
             _subscribers: subscribers,
             _services: services,

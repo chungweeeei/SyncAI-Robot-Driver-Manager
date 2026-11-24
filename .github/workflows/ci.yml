@@ -72,6 +72,13 @@ jobs:
           docker exec "$CONTAINER" bash -lc \
             'src=/workspace/src/syncai_driver_manager; "$src/.devcontainer/livox_msgs/import_livox_msgs.sh" /workspace'
 
+      # Messages only: the M20's /BATTERY_DATA type, from DEEP Robotics' sdk_deploy (see
+      # .devcontainer/drdds_msgs/package.xml)
+      - name: Import drdds messages
+        run: |
+          docker exec "$CONTAINER" bash -lc \
+            'src=/workspace/src/syncai_driver_manager; "$src/.devcontainer/drdds_msgs/import_drdds_msgs.sh" /workspace'
+
       - name: colcon build
         run: |
           docker exec "$CONTAINER" bash -lc \

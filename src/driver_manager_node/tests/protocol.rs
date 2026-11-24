@@ -42,6 +42,8 @@ fn battery_minimum_packet() {
             temperature: 32.0,
             charge_state: ChargeState::Discharging,
             cells: None,
+            charge: None,
+            design_capacity: None,
         }
     );
 }

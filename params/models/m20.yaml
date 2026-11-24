@@ -32,6 +32,12 @@
     # ~10 Hz and the controller at 20 Hz, so 0.3 s rides out two lost messages.
     cmd_timeout: 0.3
 
+    # The vendor's battery (drdds/msg/BatteryData, one entry per pack, 1 Hz),
+    # re-published as battery_state — the same sensor_msgs/BatteryState the
+    # G23's telemetry gives, the two packs combined into one battery. Absolute
+    # for the reason the monitor topics below are.
+    battery_topic: "/BATTERY_DATA"
+
     # The M20's lidar is the vendor stack's, not a Livox driver of ours: both
     # lidars merged into one PointCloud2 on /LIDAR/POINTS_UDP, and its IMU on
     # /IMU, published on DDS domain 0 from the robot's other computers with NO

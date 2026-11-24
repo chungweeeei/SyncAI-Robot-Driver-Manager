@@ -161,6 +161,11 @@ pub struct Battery {
     /// Per-cell voltages, only when the packet carries all of them; a cell bms.rs has not read
     /// yet is NaN
     pub cells: Option<[f32; BMS_NUM_CELLS]>,
+    /// Remaining charge [Ah]; None on the G23, whose BMS packet does not carry it (the M20's
+    /// does, `m20_battery.rs`)
+    pub charge: Option<f32>,
+    /// Nominal capacity [Ah]; None on the G23, as `charge`
+    pub design_capacity: Option<f32>,
 }
 
 /// Derived from the current sign (BatteryState: negative while discharging) rather than
@@ -174,7 +179,7 @@ pub enum ChargeState {
 }
 
 impl ChargeState {
-    fn from_current(current: f32) -> Self {
+    pub fn from_current(current: f32) -> Self {
         if current > BMS_IDLE_CURRENT {
             Self::Charging
         } else if current < -BMS_IDLE_CURRENT {
@@ -407,6 +412,8 @@ impl SectionParser<'_> {
             temperature,
             charge_state: ChargeState::from_current(current),
             cells,
+            charge: None,
+            design_capacity: None,
         })
     }
 }

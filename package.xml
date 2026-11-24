@@ -12,6 +12,9 @@
   <depend>syncai_common</depend>
   <!-- livox/lidar's CustomMsg, subscribed by the sensor monitor -->
   <depend>livox_ros_driver2</depend>
+  <!-- The Lynx M20's /BATTERY_DATA (drdds/msg/BatteryData), re-published as battery_state.
+       DEEP Robotics' sdk_deploy/src/drdds, which the Workspace builds for every robot -->
+  <depend>drdds</depend>
   <depend>geometry_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>

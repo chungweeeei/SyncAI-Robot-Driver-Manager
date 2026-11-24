@@ -127,13 +127,16 @@ cargo test --target-dir /workspace/build/.clippy
 │       ├── drive.rs        # which robot: G23 (CommandLink) or M20 (M20Link)
 │       ├── m20_protocol.rs # pure Lynx M20 header + JSON functions; cargo test needs no ROS
 │       ├── m20_link.rs     # the M20 socket: heartbeat, 20 Hz axis command, status log
+│       ├── m20_battery.rs  # pure: the M20's battery packs -> one Battery
+│       ├── m20_battery_forwarder.rs # /BATTERY_DATA -> battery_state (M20)
 │       ├── service.rs      # set_motion_key / set_policy_mode / set_speed_scale / set_safety_lock
 │       └── tests/          # unit tests, one file per module (included with #[path])
 │
 │   # Only for developing this repo on its own; SyncAI-Robot-Workspace does not use these
 ├── interface.repos         # vcstool list: where the shared syncai_common messages come from
 └── .devcontainer/          # Dockerfile + devcontainer.json
-    └── livox_msgs/         # messages-only livox_ros_driver2 + import_livox_msgs.sh
+    ├── livox_msgs/         # messages-only livox_ros_driver2 + import_livox_msgs.sh
+    └── drdds_msgs/         # the three drdds messages the M20 battery needs + import_drdds_msgs.sh
 ```
 
 The workspace inside the container looks like this, matching the paths in SyncAI-Robot-Workspace:
@@ -144,6 +147,7 @@ The workspace inside the container looks like this, matching the paths in SyncAI
 └── src/
     ├── syncai_common/          # shared messages, vcs-imported by postCreateCommand
     ├── livox_ros_driver2/      # messages only, from .devcontainer/livox_msgs (postCreateCommand)
+    ├── drdds/                  # BatteryData messages only, from .devcontainer/drdds_msgs (postCreateCommand)
     └── syncai_driver_manager/  # bind mount: this repo
 ```
 
@@ -182,7 +186,7 @@ C++ README is authoritative.
 | Publishes | `imu` (`syncai_common/IMUState`, SensorData), `motor_states` (`syncai_common/MotorStates`, SensorData), `motor_states_low_rate` (the same messages thinned to 20 Hz, SensorData; what `syncai_robot_state` and the backend subscribe — `motor_states` stays at the telemetry rate, ~200 Hz), `battery_state` (`sensor_msgs/BatteryState`, reliable depth 10), `mode` (`std_msgs/Int32MultiArray`, reliable depth 10), `safety_locked` (`std_msgs/Bool`, reliable + transient local depth 1; published at startup and whenever the safety lock changes; **Rust-only addition**, not in the C++ version) |
 | Subscribes | `cmd_vel` (`geometry_msgs/Twist`) → `AXES vx vy wz`; dropped (nothing sent) while the safety lock is engaged. For the sensor monitor only (**Rust-only addition**, counted, never used): `monitor_lidar_topic` (default `livox/lidar`, `livox_ros_driver2/CustomMsg` or `sensor_msgs/PointCloud2` by `monitor_lidar_type`), `monitor_imu_topic` (default `livox/imu`, `sensor_msgs/Imu`), `image_raw/compressed` (`sensor_msgs/CompressedImage`), all best-effort |
 | Services | `set_motion_key`, `set_policy_mode`, `set_speed_scale`, `set_safety_lock` (`std_srvs/SetBool`: `true` engages the safety lock without sending any command, `false` releases it **and always sends `RESET_SAFETY`**, which clears the controller's own lock; **replaces the C++ version's `reset_safety`** (`std_srvs/Trigger`), so callers of `reset_safety` must switch) |
-| Parameters | `robot_protocol` (`g23` / `m20`, read-only, declared first: only that robot's own parameters are declared). G23 only: `telemetry_recv_ip/port`, `command_target_ip/port` (read-only), `scale_fwd` / `scale_back` / `scale_left` / `scale_right` / `scale_turn_l` / `scale_turn_r` (>= 0, changeable at runtime with `ros2 param set` or `set_speed_scale`; never written back to the YAML). M20 only: `motion_host_ip/port`, `max_vx` / `max_vy` / `max_wz`, `cmd_timeout` (read-only; see "Driving a Lynx M20"). Both: `monitor_report_period` / `monitor_telemetry_timeout` / `monitor_lidar_timeout` / `monitor_imu_timeout` / `monitor_camera_timeout` / `monitor_command_idle` (seconds, read-only; see below), `monitor_lidar_topic` / `monitor_lidar_type` / `monitor_imu_topic` (read-only; see below) |
+| Parameters | `robot_protocol` (`g23` / `m20`, read-only, declared first: only that robot's own parameters are declared). G23 only: `telemetry_recv_ip/port`, `command_target_ip/port` (read-only), `scale_fwd` / `scale_back` / `scale_left` / `scale_right` / `scale_turn_l` / `scale_turn_r` (>= 0, changeable at runtime with `ros2 param set` or `set_speed_scale`; never written back to the YAML). M20 only: `motion_host_ip/port`, `max_vx` / `max_vy` / `max_wz`, `cmd_timeout`, `battery_topic` (read-only; see "Driving a Lynx M20"). Both: `monitor_report_period` / `monitor_telemetry_timeout` / `monitor_lidar_timeout` / `monitor_imu_timeout` / `monitor_camera_timeout` / `monitor_command_idle` (seconds, read-only; see below), `monitor_lidar_topic` / `monitor_lidar_type` / `monitor_imu_topic` (read-only; see below) |
 
 ### Params files and robot models
 
@@ -221,8 +225,29 @@ A heartbeat (`100/100`) goes out every 500 ms from start-up, followed once by Re
 robot reports its status only to an address that keeps sending heartbeats, and honours axis
 commands only in Regular mode. The node logs each change of the reported `MotionState` (e.g.
 `[M20] MotionState 1 (stand)`) and counts the robot's datagrams in the monitor's telemetry row;
-it publishes none of the G23 topics (`imu`, `motor_states`, `battery_state`, `mode`), and opens
-neither G23 socket.
+it publishes none of the other G23 topics (`imu`, `motor_states`, `mode`), and opens neither G23
+socket.
+
+`battery_state` is published on both robots, the same `sensor_msgs/BatteryState` on the same topic
+with the same QoS, so `syncai_robot_state` and charge.xml's `WaitForCharging` need not know which
+robot they read. On the M20 it comes from the vendor's `/BATTERY_DATA` (`drdds/msg/BatteryData`,
+1 Hz, `battery_topic`; absolute, the vendor's stack has no namespace), one entry per pack. The M20
+has two packs in parallel, combined into one battery (`m20_battery.rs`):
+
+| `BatteryState` | G23 (`BMS_V2` telemetry) | M20 (`/BATTERY_DATA`, both packs) |
+| --- | --- | --- |
+| `voltage` | the pack's | the mean of the packs' |
+| `current` | the pack's | the sum (negative while discharging) |
+| `percentage` | the BMS's soc / 100 | the packs' `battery_level`, weighted by nominal capacity, / 100 |
+| `charge` / `design_capacity` | NaN | the sums of `remaining_capacity` / `nominal_capacity` [Ah] |
+| `temperature` | mean of the thermistors that read | the same, over both packs |
+| `power_supply_status` | from the current, 0.1 A deadband | the same, on the summed current |
+| `cell_voltage` | the 8 cells when sent | empty (not reported) |
+| `header.stamp` | our clock | our clock (the vendor's stamp is zero) |
+
+A pack slot reading 0 V is left out; with no pack at all nothing is published (a warning every
+10 s) rather than an empty battery. robot01, lying, 2026-11-24: 73.5 V, -2.1 A, 48.5 % (packs at
+52 % and 45 %), 4.69 of 9.00 Ah.
 
 `max_*` are unmeasured: the defaults (2.0 m/s, 1.0 m/s, 2.0 rad/s) are chosen so a command
 maps to a smaller fraction of full speed than intended, never a larger one. The protocol source is

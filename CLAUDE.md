@@ -40,6 +40,10 @@ docker exec syncai-ros2-rust bash -lc 'cd /workspace/src/syncai_driver_manager &
   `src/syncai_driver_manager/.devcontainer/livox_msgs/import_livox_msgs.sh /workspace`. It is a
   messages-only stand-in (the real driver needs Livox-SDK2 + PCL); keep its version equal to the
   Workspace's `third-party.repos` pin.
+- If `drdds` is missing (any volume created before the M20 battery), run
+  `src/syncai_driver_manager/.devcontainer/drdds_msgs/import_drdds_msgs.sh /workspace`: the three
+  messages `/BATTERY_DATA` needs, from the `sdk_deploy` commit the Workspace's
+  `third-party-sparse.repos` pins (keep the two equal).
 - Warnings from `/opt/ros2_rust_underlay/...` (rclrs itself) are not ours; ignore them.
 - Before finishing, build / clippy / fmt must have zero warnings and all unit tests must pass.
 
@@ -70,29 +74,36 @@ docker exec syncai-ros2-rust bash -lc 'cd /workspace/src/syncai_driver_manager &
 | `drive.rs` | `Drive`: which robot the ROS interfaces drive, picked by `robot_protocol` (`g23` / `m20`) |
 | `m20_protocol.rs` | **Pure** Lynx M20 functions (16-byte header + JSON, key → `MotionParam`, cmd_vel → axis ratio); unit tested |
 | `m20_link.rs` | `M20Link`: one UDP socket to the M20, a send thread (2 Hz heartbeat, 20 Hz axis command with a cmd_vel timeout) and a receive thread (logs `MotionState`) |
+| `m20_battery.rs` | **Pure**: the M20's `/BATTERY_DATA` packs combined into one `protocol::Battery`; unit tested |
+| `m20_battery_forwarder.rs` | M20 only: subscribes `battery_topic` (`drdds/msg/BatteryData`) on its own Worker and publishes `battery_state` with the G23's builder (`publishers::battery_state_msg`) |
 
 **Params files.** `params/driver_manager_params.yaml` holds only what every model shares (the
 monitor's period and timeouts); everything that is one robot's is in
 `params/models/<robot_model>.yaml`, which the launch loads after it (`robot_model` from the INI,
 `g23` when missing). `g23.yaml`: `robot_protocol`, the UDP endpoints, the Livox monitor topics and
-`scale_*`; `m20.yaml`: `robot_protocol`, `motion_host_*`, `max_*`, `cmd_timeout` and the vendor's
-monitor topics. The launch **refuses a model with no file** (the code defaults would bind on
+`scale_*`; `m20.yaml`: `robot_protocol`, `motion_host_*`, `max_*`, `cmd_timeout`, `battery_topic` and the
+vendor's monitor topics. The launch **refuses a model with no file** (the code defaults would bind on
 `0.0.0.0:50012` with every scale 1.0 and look healthy). A new robot-specific key goes in the model
 files, not the shared one.
 
 With `robot_protocol: m20` (the launch loads `params/models/m20.yaml` when the INI says
 `robot_model: m20`) neither G23 socket nor the telemetry thread exists, and the G23's
 `telemetry_*` / `command_*` / `scale_*` are not declared (nor the M20's `motion_host_*` / `max_*` /
-`cmd_timeout` on a G23: `robot_protocol` is declared first and picks the set; the G23's
+`cmd_timeout` / `battery_topic` on a G23: `robot_protocol` is declared first and picks the set; the G23's
 `VelocityScale` lives in `Drive::G23`); only motion keys "0" / "2" and `cmd_vel` do anything, every
-other call answers `success: false`. The M20's lidar topics are absolute (`/LIDAR/POINTS_UDP`,
-`/IMU`) because its vendor stack publishes them without a namespace — the only names this node
-uses outside `/<robot_id>`. The M20's motion host is `10.21.31.103:30000` on its internal LAN:
+other call answers `success: false`. `battery_state` is published on **both** robots, from one
+builder (`publishers::battery_state_msg`): on a G23 from the telemetry's `BMS_V2`, on an M20 from
+the vendor's `/BATTERY_DATA` (two packs combined, `m20_battery.rs`); keep the two identical in
+topic, type and QoS, since `syncai_robot_state` and charge.xml's `WaitForCharging` read either.
+The M20's lidar and battery topics are absolute (`/LIDAR/POINTS_UDP`, `/IMU`, `/BATTERY_DATA`)
+because its vendor stack publishes them without a namespace — the only names this node uses
+outside `/<robot_id>`. The M20's motion host is `10.21.31.103:30000` on its internal LAN:
 **the same real-robot rule applies to it** — test against `motion_host_ip:=127.0.0.1`.
 
 Threads: `cmd_vel` has one rclrs Worker, and the four services share one Worker (equivalent to the
 C++ version's two MutuallyExclusive callback groups; the two workers run in parallel). Telemetry has
-its own `std::thread` on a G23; on an M20, `M20Link` has two (send, receive) instead. The lidar / camera subscriptions have a third Worker, and the status table
+its own `std::thread` on a G23; on an M20, `M20Link` has two (send, receive) instead, and the battery forwarder a Worker of
+its own. The lidar / camera subscriptions have a third Worker, and the status table
 its own `std::thread`; all of them write or read the shared `Arc<SensorHealth>`. New packet parsing
 logic goes in `protocol.rs`, with unit tests.
 

@@ -8,13 +8,12 @@ use std::time::{Duration, Instant};
 
 use rclrs::*;
 use ros_env::builtin_interfaces::msg::Time as TimeMsg;
-use ros_env::sensor_msgs::msg::BatteryState;
-use ros_env::std_msgs::msg::{Header, Int32MultiArray};
+use ros_env::std_msgs::msg::Int32MultiArray;
 use ros_env::syncai_common::msg::{IMUState, MotorState, MotorStates};
 
 use super::health::SensorHealth;
-use super::protocol::{self, Battery, ChargeState, JOINT_NAMES, NUM_DOF, Sections, Telemetry};
-use super::publishers::Publishers;
+use super::protocol::{self, Battery, JOINT_NAMES, NUM_DOF, Sections, Telemetry};
+use super::publishers::{self, Publishers};
 use super::session::UdpSession;
 
 // Sleeps in the kernel's recv while idle, but wakes every 100 ms to check `running`
@@ -133,30 +132,7 @@ impl TelemetryLoop {
     }
 
     fn publish_battery(&self, battery: &Battery) {
-        let msg = BatteryState {
-            header: Header {
-                stamp: self.stamp(),
-                ..Default::default()
-            },
-            voltage: battery.voltage,
-            current: battery.current,
-            // The BMS reports 0-100; BatteryState.percentage is defined on 0-1
-            percentage: battery.soc / 100.0,
-            temperature: battery.temperature,
-            charge: f32::NAN,
-            capacity: f32::NAN,
-            design_capacity: f32::NAN,
-            power_supply_status: match battery.charge_state {
-                ChargeState::Charging => BatteryState::POWER_SUPPLY_STATUS_CHARGING,
-                ChargeState::Discharging => BatteryState::POWER_SUPPLY_STATUS_DISCHARGING,
-                ChargeState::Idle => BatteryState::POWER_SUPPLY_STATUS_NOT_CHARGING,
-            },
-            power_supply_health: BatteryState::POWER_SUPPLY_HEALTH_UNKNOWN,
-            power_supply_technology: BatteryState::POWER_SUPPLY_TECHNOLOGY_UNKNOWN,
-            present: true,
-            cell_voltage: battery.cells.map(Vec::from).unwrap_or_default(),
-            ..Default::default()
-        };
+        let msg = publishers::battery_state_msg(battery, self.stamp());
         self.publish(&self.publishers.battery_state, msg, "battery_state");
 
         log_debug!(
@@ -277,10 +253,6 @@ impl TelemetryLoop {
     }
 
     fn stamp(&self) -> TimeMsg {
-        let nsec = self.clock.now().nsec;
-        TimeMsg {
-            sec: i32::try_from(nsec.div_euclid(1_000_000_000)).unwrap_or(i32::MAX),
-            nanosec: nsec.rem_euclid(1_000_000_000) as u32,
-        }
+        publishers::stamp_now(&self.clock)
     }
 }
