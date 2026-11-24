@@ -10,7 +10,7 @@ pub const RATE_WINDOW: Duration = Duration::from_secs(2);
 
 /// One sensor's health, as the status table and the transition log show it.
 ///
-/// Declared from best to worst: `Ord` is what picks the worse of the lidar's two streams.
+/// Declared from best to worst, so `Ord` / `max` give the worse of two statuses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Status {
     Ok,
@@ -134,6 +134,7 @@ pub fn classify_command(snapshot: &StreamSnapshot, idle_after: Duration) -> Stat
 pub struct Thresholds {
     pub telemetry_timeout: Duration,
     pub lidar_timeout: Duration,
+    pub imu_timeout: Duration,
     pub camera_timeout: Duration,
     pub command_idle: Duration,
 }
@@ -151,6 +152,19 @@ pub struct SensorHealth {
     lidar_imu: Mutex<StreamStats>,
     camera: Mutex<StreamStats>,
 }
+
+/// How many rows `SensorHealth::rows` returns (telemetry, command, lidar, imu, camera)
+pub const ROW_COUNT: usize = 5;
+
+/// What every row reads before anything arrives, in `rows` order: the monitor starts from it
+/// so the first evaluation does not log a "transition" for a sensor that has not started yet
+pub const INITIAL_STATUSES: [Status; ROW_COUNT] = [
+    Status::NoData,
+    Status::Idle,
+    Status::NoData,
+    Status::NoData,
+    Status::NoData,
+];
 
 /// One line of the status table
 #[derive(Debug, Clone, PartialEq)]
@@ -196,18 +210,20 @@ impl SensorHealth {
         lock(&self.camera).record_value(Instant::now(), bytes as u64);
     }
 
-    /// The four rows of the table, in display order: telemetry, command, lidar, camera.
+    /// The rows of the table, in display order: telemetry, command, lidar, imu, camera.
     /// `safety_locked` is shown on the command row, since the lock is what gates that link.
-    pub fn rows(&self, now: Instant, thresholds: &Thresholds, safety_locked: bool) -> [Row; 4] {
+    pub fn rows(
+        &self,
+        now: Instant,
+        thresholds: &Thresholds,
+        safety_locked: bool,
+    ) -> [Row; ROW_COUNT] {
         let telemetry = lock(&self.telemetry).snapshot(now);
         let command = lock(&self.command).snapshot(now);
         let cloud = lock(&self.lidar_cloud).snapshot(now);
         let imu = lock(&self.lidar_imu).snapshot(now);
         let camera = lock(&self.camera).snapshot(now);
         let from = *lock(&self.telemetry_from);
-
-        let cloud_status = classify_stream(&cloud, thresholds.lidar_timeout);
-        let imu_status = classify_stream(&imu, thresholds.lidar_timeout);
 
         [
             Row {
@@ -234,21 +250,28 @@ impl SensorHealth {
                     if safety_locked { "ON" } else { "off" },
                 ),
             },
-            // The cloud and the IMU come in on different UDP ports from the MID360, so one can
-            // stop without the other; the row takes the worse of the two
+            // The cloud and the IMU are separate rows with their own timeouts: they can stop
+            // independently (on the G23 they come in on different UDP ports from the MID360,
+            // and the M20's /IMU is the vendor's, not the lidar's), and a row of its own gives
+            // the IMU its own rate and age
             Row {
                 name: "lidar",
-                status: cloud_status.max(imu_status),
+                status: classify_stream(&cloud, thresholds.lidar_timeout),
                 rate_hz: cloud.rate_hz,
                 age: cloud.age,
                 detail: format!(
-                    "points {}, imu {} {:.1} Hz",
+                    "points {}",
                     cloud
                         .last_value
                         .map_or_else(|| "-".to_owned(), |n| n.to_string()),
-                    imu_status.label(),
-                    imu.rate_hz,
                 ),
+            },
+            Row {
+                name: "imu",
+                status: classify_stream(&imu, thresholds.imu_timeout),
+                rate_hz: imu.rate_hz,
+                age: imu.age,
+                detail: format!("received {}", imu.total),
             },
             Row {
                 name: "camera",

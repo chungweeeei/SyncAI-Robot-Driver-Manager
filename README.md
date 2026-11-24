@@ -182,7 +182,7 @@ C++ README is authoritative.
 | Publishes | `imu` (`syncai_common/IMUState`, SensorData), `motor_states` (`syncai_common/MotorStates`, SensorData), `motor_states_low_rate` (the same messages thinned to 20 Hz, SensorData; what `syncai_robot_state` and the backend subscribe — `motor_states` stays at the telemetry rate, ~200 Hz), `battery_state` (`sensor_msgs/BatteryState`, reliable depth 10), `mode` (`std_msgs/Int32MultiArray`, reliable depth 10), `safety_locked` (`std_msgs/Bool`, reliable + transient local depth 1; published at startup and whenever the safety lock changes; **Rust-only addition**, not in the C++ version) |
 | Subscribes | `cmd_vel` (`geometry_msgs/Twist`) → `AXES vx vy wz`; dropped (nothing sent) while the safety lock is engaged. For the sensor monitor only (**Rust-only addition**, counted, never used): `monitor_lidar_topic` (default `livox/lidar`, `livox_ros_driver2/CustomMsg` or `sensor_msgs/PointCloud2` by `monitor_lidar_type`), `monitor_imu_topic` (default `livox/imu`, `sensor_msgs/Imu`), `image_raw/compressed` (`sensor_msgs/CompressedImage`), all best-effort |
 | Services | `set_motion_key`, `set_policy_mode`, `set_speed_scale`, `set_safety_lock` (`std_srvs/SetBool`: `true` engages the safety lock without sending any command, `false` releases it **and always sends `RESET_SAFETY`**, which clears the controller's own lock; **replaces the C++ version's `reset_safety`** (`std_srvs/Trigger`), so callers of `reset_safety` must switch) |
-| Parameters | `robot_protocol` (`g23` / `m20`, read-only, declared first: only that robot's own parameters are declared). G23 only: `telemetry_recv_ip/port`, `command_target_ip/port` (read-only), `scale_fwd` / `scale_back` / `scale_left` / `scale_right` / `scale_turn_l` / `scale_turn_r` (>= 0, changeable at runtime with `ros2 param set` or `set_speed_scale`; never written back to the YAML). M20 only: `motion_host_ip/port`, `max_vx` / `max_vy` / `max_wz`, `cmd_timeout` (read-only; see "Driving a Lynx M20"). Both: `monitor_report_period` / `monitor_telemetry_timeout` / `monitor_lidar_timeout` / `monitor_camera_timeout` / `monitor_command_idle` (seconds, read-only; see below), `monitor_lidar_topic` / `monitor_lidar_type` / `monitor_imu_topic` (read-only; see below) |
+| Parameters | `robot_protocol` (`g23` / `m20`, read-only, declared first: only that robot's own parameters are declared). G23 only: `telemetry_recv_ip/port`, `command_target_ip/port` (read-only), `scale_fwd` / `scale_back` / `scale_left` / `scale_right` / `scale_turn_l` / `scale_turn_r` (>= 0, changeable at runtime with `ros2 param set` or `set_speed_scale`; never written back to the YAML). M20 only: `motion_host_ip/port`, `max_vx` / `max_vy` / `max_wz`, `cmd_timeout` (read-only; see "Driving a Lynx M20"). Both: `monitor_report_period` / `monitor_telemetry_timeout` / `monitor_lidar_timeout` / `monitor_imu_timeout` / `monitor_camera_timeout` / `monitor_command_idle` (seconds, read-only; see below), `monitor_lidar_topic` / `monitor_lidar_type` / `monitor_imu_topic` (read-only; see below) |
 
 ### Params files and robot models
 
@@ -234,7 +234,7 @@ on 30000; **never point it at `10.21.31.103` with the robot in reach of people**
 
 ### Sensor status on stdout
 
-The node watches four things and prints them as one table every `monitor_report_period` seconds
+The node watches five things and prints them as one table every `monitor_report_period` seconds
 (5 s by default), so attaching to the `driver_manager` pane answers "is everything alive?" at a
 glance:
 
@@ -243,7 +243,8 @@ glance:
   SENSOR     STATUS        RATE       AGE  DETAIL
   telemetry  OK         19.5 Hz    0.02 s  from 192.168.1.120:50051, parse warnings 0 (total 0)
   command    IDLE        0.0 Hz   12.30 s  sent 1234, failed 0, safety_lock off
-  lidar      OK         10.0 Hz    0.05 s  points 19968, imu OK 200.0 Hz
+  lidar      OK         10.0 Hz    0.05 s  points 19968
+  imu        OK        200.0 Hz    0.00 s  received 145210
   camera     STALE       0.0 Hz    3.21 s  last frame 98 KB
 ```
 
@@ -251,7 +252,8 @@ glance:
 | --- | --- | --- |
 | `telemetry` | datagrams on the telemetry socket | `NO DATA` (never), `OK`, `STALE` (none for `monitor_telemetry_timeout`) |
 | `command` | sends on the command socket | `IDLE` (nothing sent for `monitor_command_idle`: normal while nobody drives), `OK`, `ERROR` (a send failed within the last 2 s, e.g. ICMP port unreachable). UDP has no ack, so the controller can never be shown as down from this side |
-| `lidar` | `monitor_lidar_topic` and `monitor_imu_topic` (G23: `livox/lidar` CustomMsg and `livox/imu`; M20: `/LIDAR/POINTS_UDP` PointCloud2 and `/IMU`, absolute because the vendor publishes them without a namespace; `monitor_lidar_type` `livox` / `pointcloud2` picks the cloud's message type) | the worse of the two (they arrive as separate streams): `NO DATA`, `OK`, `STALE` (`monitor_lidar_timeout`) |
+| `lidar` | `monitor_lidar_topic` (G23: `livox/lidar` CustomMsg; M20: `/LIDAR/POINTS_UDP` PointCloud2, absolute because the vendor publishes it without a namespace; `monitor_lidar_type` `livox` / `pointcloud2` picks the message type) | `NO DATA`, `OK`, `STALE` (`monitor_lidar_timeout`) |
+| `imu` | `monitor_imu_topic` (`sensor_msgs/Imu`; G23: `livox/imu`, the MID360's; M20: the vendor's `/IMU`) | `NO DATA`, `OK`, `STALE` (`monitor_imu_timeout`). Its own row, not part of `lidar`, because the two stop independently (separate UDP ports on the MID360, separate sources on the M20) |
 | `camera` | `image_raw/compressed` from `syncai_camera_feeder` | `NO DATA`, `OK`, `STALE` (`monitor_camera_timeout`) |
 
 Rates are counts over the last 2 s. A change of status is logged the moment it happens (checked

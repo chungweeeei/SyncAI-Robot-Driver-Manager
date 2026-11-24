@@ -8,7 +8,7 @@ message types, QoS, service names): `syncai_robot_state` and `syncai_backend` bo
 When behaviour is in doubt, the C++ version is authoritative. Deliberate exceptions: the added
 `safety_locked` topic, `set_safety_lock` (`std_srvs/SetBool`), which replaces `reset_safety`, and
 the sensor monitor (subscriptions to the lidar cloud / IMU named by `monitor_lidar_topic` /
-`monitor_imu_topic` and to `image_raw/compressed`, a status table on stdout, eight `monitor_*`
+`monitor_imu_topic` and to `image_raw/compressed`, a status table on stdout, nine `monitor_*`
 parameters) — it adds readers only, no published interface.
 
 **The repo root is the package itself** (`package.xml` and `Cargo.toml` are at the root); the

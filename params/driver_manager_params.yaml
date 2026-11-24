@@ -18,19 +18,24 @@
 /**:
   ros__parameters:
     # --- Sensor monitor (the status table on stdout) ---
-    # The node prints one table of telemetry / command / lidar / camera every
-    # monitor_report_period seconds, and logs a WARN the moment a stream goes
-    # quiet for longer than its timeout (an INFO when it recovers). 5 s keeps
-    # the pane readable and the multilog small (~6 lines per report) while still
-    # being the first thing an engineer sees when attaching.
+    # The node prints one table of telemetry / command / lidar / imu / camera
+    # every monitor_report_period seconds, and logs a WARN the moment a stream
+    # goes quiet for longer than its timeout (an INFO when it recovers). 5 s
+    # keeps the pane readable and the multilog small (~7 lines per report)
+    # while still being the first thing an engineer sees when attaching.
     monitor_report_period: 5.0
     # Timeouts are a few periods of each stream's nominal rate, so one late
     # message never flips a sensor to STALE:
     #   telemetry  the controller streams several sections per second  -> 1.0 s
-    #   lidar      MID360 cloud at 10 Hz (livox/lidar), IMU at 200 Hz  -> 0.5 s
+    #   lidar      the G23's MID360 cloud at 10 Hz (5 periods)         -> 0.5 s
+    #   imu        the G23's MID360 IMU at 200 Hz (40 periods; still
+    #              10 periods of a 50 Hz IMU)                          -> 0.2 s
     #   camera     camera_feeder's image_raw/compressed at 30 Hz       -> 1.0 s
+    # The M20's /LIDAR/POINTS_UDP and /IMU rates are unmeasured; if either is
+    # slower, set its timeout in params/models/m20.yaml.
     monitor_telemetry_timeout: 1.0
     monitor_lidar_timeout: 0.5
+    monitor_imu_timeout: 0.2
     monitor_camera_timeout: 1.0
     # The command link has no acknowledgement, so it can only be OK (sent
     # recently), IDLE (nothing to send — normal while nobody drives) or ERROR

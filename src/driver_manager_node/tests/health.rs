@@ -6,6 +6,7 @@ use super::*;
 const THRESHOLDS: Thresholds = Thresholds {
     telemetry_timeout: Duration::from_secs(1),
     lidar_timeout: Duration::from_millis(500),
+    imu_timeout: Duration::from_millis(200),
     camera_timeout: Duration::from_secs(1),
     command_idle: Duration::from_secs(1),
 };
@@ -103,26 +104,45 @@ fn rows_before_anything_arrives() {
     let health = SensorHealth::default();
     let rows = health.rows(Instant::now(), &THRESHOLDS, false);
     let statuses: Vec<_> = rows.iter().map(|r| r.status).collect();
-    assert_eq!(
-        statuses,
-        [Status::NoData, Status::Idle, Status::NoData, Status::NoData]
-    );
+    // The monitor starts from INITIAL_STATUSES; it must match, or the first evaluation logs a
+    // transition for every sensor that has not started yet
+    assert_eq!(statuses, INITIAL_STATUSES);
+    let names: Vec<_> = rows.iter().map(|r| r.name).collect();
+    assert_eq!(names, ["telemetry", "command", "lidar", "imu", "camera"]);
     assert_eq!(rows[1].detail, "sent 0, failed 0, safety_lock off");
+    assert_eq!(rows[2].detail, "points -");
+    assert_eq!(rows[3].detail, "received 0");
 }
 
 #[test]
-fn lidar_row_takes_the_worse_stream() {
+fn lidar_and_imu_rows_are_independent() {
     let health = SensorHealth::default();
     health.record_lidar_cloud(19_968);
     let rows = health.rows(Instant::now(), &THRESHOLDS, true);
-    // Cloud is fine but the IMU never arrived
-    assert_eq!(rows[2].status, Status::NoData);
-    assert_eq!(rows[2].detail, "points 19968, imu NO DATA 0.0 Hz");
+    // The cloud is fine and the IMU never arrived: each row says so on its own
+    assert_eq!(rows[2].status, Status::Ok);
+    assert_eq!(rows[2].detail, "points 19968");
+    assert_eq!(rows[3].status, Status::NoData);
+    assert_eq!(rows[3].age, None);
     assert_eq!(rows[1].detail, "sent 0, failed 0, safety_lock ON");
 
     health.record_lidar_imu();
+    health.record_lidar_imu();
     let rows = health.rows(Instant::now(), &THRESHOLDS, false);
+    assert_eq!(rows[3].status, Status::Ok);
+    assert_eq!(rows[3].detail, "received 2");
+}
+
+#[test]
+fn imu_goes_stale_on_its_own_timeout() {
+    let t0 = Instant::now();
+    let health = SensorHealth::default();
+    health.record_lidar_cloud(100);
+    health.record_lidar_imu();
+    // Past the IMU's 200 ms but inside the lidar's 500 ms: only the IMU is stale
+    let rows = health.rows(t0 + ms(300), &THRESHOLDS, false);
     assert_eq!(rows[2].status, Status::Ok);
+    assert_eq!(rows[3].status, Status::Stale);
 }
 
 #[test]
@@ -143,8 +163,8 @@ fn rows_report_telemetry_source_and_camera_size() {
     );
     assert_eq!(rows[1].status, Status::Error);
     assert_eq!(rows[1].detail, "sent 1, failed 1, safety_lock off");
-    assert_eq!(rows[3].status, Status::Ok);
-    assert_eq!(rows[3].detail, "last frame 100 KB");
+    assert_eq!(rows[4].status, Status::Ok);
+    assert_eq!(rows[4].detail, "last frame 100 KB");
 }
 
 #[test]

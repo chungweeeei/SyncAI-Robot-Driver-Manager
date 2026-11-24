@@ -168,6 +168,7 @@ pub struct MonitorConfig {
     pub report_period: ReadOnlyParameter<f64>,
     pub telemetry_timeout: ReadOnlyParameter<f64>,
     pub lidar_timeout: ReadOnlyParameter<f64>,
+    pub imu_timeout: ReadOnlyParameter<f64>,
     pub camera_timeout: ReadOnlyParameter<f64>,
     pub command_idle: ReadOnlyParameter<f64>,
     pub lidar_topic: ReadOnlyParameter<Arc<str>>,
@@ -211,7 +212,12 @@ impl MonitorConfig {
             lidar_timeout: seconds(
                 "monitor_lidar_timeout",
                 0.5,
-                "seconds without a lidar cloud or IMU message before the lidar reads STALE",
+                "seconds without a lidar cloud before the lidar reads STALE",
+            )?,
+            imu_timeout: seconds(
+                "monitor_imu_timeout",
+                0.2,
+                "seconds without an IMU message before the imu reads STALE",
             )?,
             camera_timeout: seconds(
                 "monitor_camera_timeout",
@@ -256,6 +262,7 @@ impl MonitorConfig {
         Thresholds {
             telemetry_timeout: seconds(&self.telemetry_timeout),
             lidar_timeout: seconds(&self.lidar_timeout),
+            imu_timeout: seconds(&self.imu_timeout),
             camera_timeout: seconds(&self.camera_timeout),
             command_idle: seconds(&self.command_idle),
         }

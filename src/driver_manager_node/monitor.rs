@@ -145,9 +145,7 @@ struct MonitorLoop {
 impl MonitorLoop {
     fn run(&self, running: &AtomicBool) {
         let started = Instant::now();
-        // What every row reads before anything arrives, so the first evaluation does not log a
-        // "transition" for a sensor that simply has not started yet
-        let mut previous = [Status::NoData, Status::Idle, Status::NoData, Status::NoData];
+        let mut previous = health::INITIAL_STATUSES;
         let mut next_evaluate = started;
         let mut next_report = started + self.report_period;
 
