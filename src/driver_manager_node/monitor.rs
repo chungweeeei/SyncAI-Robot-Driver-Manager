@@ -6,45 +6,77 @@ use std::time::{Duration, Instant};
 
 use rclrs::*;
 use ros_env::livox_ros_driver2::msg::CustomMsg;
-use ros_env::sensor_msgs::msg::{CompressedImage, Imu};
+use ros_env::sensor_msgs::msg::{CompressedImage, Imu, PointCloud2};
 
 use super::command::SafetyLock;
 use super::health::{self, SensorHealth, Status, Thresholds};
+use super::parameters::LidarMsgType;
 
 // Statuses are re-evaluated this often, so a transition is logged within half a second of the
 // stream crossing its timeout. The thread sleeps in short steps to notice shutdown quickly.
 const EVALUATE_PERIOD: Duration = Duration::from_millis(500);
 const SLEEP_STEP: Duration = Duration::from_millis(100);
 
+/// Where the monitor's lidar comes from (`monitor_lidar_*` / `monitor_imu_topic`)
+pub struct LidarTopics<'a> {
+    pub cloud: &'a str,
+    pub cloud_type: LidarMsgType,
+    pub imu: &'a str,
+}
+
+/// The lidar cloud subscription, of whichever type the robot's lidar publishes
+enum LidarCloudSubscription {
+    Livox(WorkerSubscription<CustomMsg, Arc<SensorHealth>>),
+    PointCloud2(WorkerSubscription<PointCloud2, Arc<SensorHealth>>),
+}
+
 /// The lidar and camera topics, subscribed only to count them: nothing here uses their data.
 ///
 /// One worker of their own, so the camera's 30 Hz JPEGs and the lidar IMU's 200 Hz never queue
 /// behind cmd_vel or a service. Every subscription is best-effort, which matches both a
-/// reliable and a best-effort publisher; relative names resolve under `/<robot_id>`, where the
-/// Livox driver and syncai_camera_feeder publish.
+/// reliable and a best-effort publisher. Relative names resolve under `/<robot_id>`, where the
+/// G23's Livox driver and syncai_camera_feeder publish; the M20's vendor topics have no
+/// namespace, so its params file names them absolutely.
 pub struct SensorSubscriptions {
     _worker: Worker<Arc<SensorHealth>>,
-    _lidar_cloud: WorkerSubscription<CustomMsg, Arc<SensorHealth>>,
+    _lidar_cloud: LidarCloudSubscription,
     _lidar_imu: WorkerSubscription<Imu, Arc<SensorHealth>>,
     _camera: WorkerSubscription<CompressedImage, Arc<SensorHealth>>,
 }
 
 impl SensorSubscriptions {
-    pub fn create(node: &Node, health: Arc<SensorHealth>) -> Result<Self, RclrsError> {
+    pub fn create(
+        node: &Node,
+        health: Arc<SensorHealth>,
+        lidar: &LidarTopics,
+    ) -> Result<Self, RclrsError> {
         let worker = node.create_worker(health);
 
-        Ok(Self {
+        let lidar_cloud = match lidar.cloud_type {
             // CustomMsg is what the Livox driver publishes in the nav and mapping sessions
             // (xfer_format 1). The CALIBRATION session switches it to PointCloud2, but that
             // session does not run this node.
-            _lidar_cloud: worker.create_subscription(
-                "livox/lidar".sensor_data_qos(),
+            LidarMsgType::Livox => LidarCloudSubscription::Livox(worker.create_subscription(
+                lidar.cloud.sensor_data_qos(),
                 |health: &mut Arc<SensorHealth>, msg: CustomMsg| {
                     health.record_lidar_cloud(msg.point_num);
                 },
-            )?,
+            )?),
+            // An unorganised cloud has height 1, so width x height is the point count either way
+            LidarMsgType::PointCloud2 => {
+                LidarCloudSubscription::PointCloud2(worker.create_subscription(
+                    lidar.cloud.sensor_data_qos(),
+                    |health: &mut Arc<SensorHealth>, msg: PointCloud2| {
+                        health.record_lidar_cloud(msg.width.saturating_mul(msg.height));
+                    },
+                )?)
+            }
+        };
+
+        Ok(Self {
+            _lidar_cloud: lidar_cloud,
             _lidar_imu: worker.create_subscription(
-                "livox/imu".sensor_data_qos(),
+                lidar.imu.sensor_data_qos(),
                 |health: &mut Arc<SensorHealth>, _msg: Imu| health.record_lidar_imu(),
             )?,
             _camera: worker.create_subscription(

@@ -8,6 +8,9 @@ use ros_env::syncai_common::srv::{
 use std::sync::Arc;
 
 use super::command::{CommandLink, SafetyLock};
+use super::drive::{Drive, M20_UNSUPPORTED};
+use super::m20_link::M20Link;
+use super::m20_protocol;
 use super::parameters::VelocityScale;
 use super::protocol;
 
@@ -25,11 +28,10 @@ pub struct Services {
 /// Payload of the services worker; every callback receives `&mut ServiceContext`.
 ///
 /// Everything in it is an Arc or otherwise thread-safe, because it is also used outside the
-/// worker: cmd_vel reads the velocity scales, and the telemetry thread will need to trigger the
-/// safety lock.
+/// worker: cmd_vel reads the drive (and the G23's velocity scales in it), and the telemetry
+/// thread will need to trigger the safety lock.
 pub struct ServiceContext {
-    pub velocity_scale: Arc<VelocityScale>,
-    pub command: Arc<CommandLink>,
+    pub drive: Arc<Drive>,
     pub safety: Arc<SafetyLock>,
     pub logger: Logger,
 }
@@ -41,30 +43,49 @@ impl Services {
         Ok(Self {
             _set_policy: worker.create_service::<SetPolicyMode, _>(
                 "set_policy_mode",
-                |ctx: &mut ServiceContext, req: SetPolicyMode_Request| {
-                    ctx.command.send(&protocol::policy_mode_command(req.mode));
-                    SetPolicyMode_Response {
-                        success: true,
-                        message: "Policy updated".into(),
+                |ctx: &mut ServiceContext, req: SetPolicyMode_Request| match &*ctx.drive {
+                    Drive::G23 { command, .. } => {
+                        command.send(&protocol::policy_mode_command(req.mode));
+                        SetPolicyMode_Response {
+                            success: true,
+                            message: "Policy updated".into(),
+                        }
                     }
+                    Drive::M20(_) => SetPolicyMode_Response {
+                        success: false,
+                        message: M20_UNSUPPORTED.into(),
+                    },
                 },
             )?,
             _set_motion_key: worker.create_service::<SetMotionKey, _>(
                 "set_motion_key",
-                |ctx: &mut ServiceContext, req: SetMotionKey_Request| {
-                    set_motion_key(&ctx.command, &ctx.safety, &req.key)
+                |ctx: &mut ServiceContext, req: SetMotionKey_Request| match &*ctx.drive {
+                    Drive::G23 { command, .. } => set_motion_key(command, &ctx.safety, &req.key),
+                    Drive::M20(m20) => set_motion_key_m20(m20, &ctx.safety, &req.key),
                 },
             )?,
             _set_speed_scale: worker.create_service::<SetSpeedScale, _>(
                 "set_speed_scale",
-                |ctx: &mut ServiceContext, req: SetSpeedScale_Request| {
-                    set_speed_scale(&ctx.velocity_scale, &ctx.logger, req)
+                |ctx: &mut ServiceContext, req: SetSpeedScale_Request| match &*ctx.drive {
+                    Drive::G23 { scale, .. } => set_speed_scale(scale, &ctx.logger, req),
+                    // The gains are the G23 gait's and not declared on an M20, which maps
+                    // cmd_vel through its own max_* (read only).
+                    // The response has no message field, so the refusal is only a false.
+                    Drive::M20(_) => SetSpeedScale_Response { success: false },
                 },
             )?,
             _set_safety_lock: worker.create_service::<SetBool, _>(
                 "set_safety_lock",
-                |ctx: &mut ServiceContext, req: SetBool_Request| {
-                    set_safety_lock(&ctx.command, &ctx.safety, &ctx.logger, req.data)
+                |ctx: &mut ServiceContext, req: SetBool_Request| match &*ctx.drive {
+                    Drive::G23 { command, .. } => {
+                        set_safety_lock(command, &ctx.safety, &ctx.logger, req.data)
+                    }
+                    // RESET_SAFETY is the G23 controller's; the M20 path has no lock of its own
+                    // to engage or release yet
+                    Drive::M20(_) => SetBool_Response {
+                        success: false,
+                        message: M20_UNSUPPORTED.into(),
+                    },
                 },
             )?,
             _worker: worker,
@@ -90,6 +111,30 @@ fn set_motion_key(command: &CommandLink, safety: &SafetyLock, key: &str) -> SetM
             }
         }
         None => response(false, format!("Unknown motion key '{key}'")),
+    }
+}
+
+/// The M20's `set_motion_key`: the G23's keys "0" (stand) and "2" (lie down) only, so the same
+/// calls stand and lie either robot down. Every other key is refused with nothing sent: the
+/// G23's locomotion / damping / MPC have no M20 counterpart, and ESTOP is not mapped yet.
+fn set_motion_key_m20(m20: &M20Link, safety: &SafetyLock, key: &str) -> SetMotionKey_Response {
+    let response = |success: bool, message: String| SetMotionKey_Response { success, message };
+
+    // Nothing engages the lock on the M20 today (set_safety_lock is refused); kept so a future
+    // trigger gates it the same way as on the G23
+    if safety.is_engaged() {
+        return response(false, "LOCKED".into());
+    }
+
+    match m20_protocol::motion_param_for_key(key) {
+        Some(param) => {
+            m20.set_motion_state(param);
+            response(true, "Motion key sent".into())
+        }
+        None => response(
+            false,
+            format!("Motion key '{key}' is not supported on the M20 (0 stand, 2 lie down)"),
+        ),
     }
 }
 
@@ -174,130 +219,5 @@ fn set_speed_scale(
 }
 
 #[cfg(test)]
-mod tests {
-    use std::net::UdpSocket;
-    use std::time::Duration;
-
-    use super::super::session::UdpSession;
-    use super::*;
-
-    /// A `CommandLink` connected to a loopback listener, plus the listener to read it from
-    fn loopback_link() -> (CommandLink, UdpSocket) {
-        let listener = UdpSocket::bind("127.0.0.1:0").unwrap();
-        listener
-            .set_read_timeout(Some(Duration::from_secs(1)))
-            .unwrap();
-        let session = UdpSession::connect(listener.local_addr().unwrap()).unwrap();
-        (
-            CommandLink::new(session, Arc::default(), Logger::default()),
-            listener,
-        )
-    }
-
-    fn recv(listener: &UdpSocket) -> String {
-        let mut buf = [0u8; 64];
-        let n = listener.recv(&mut buf).unwrap();
-        String::from_utf8_lossy(&buf[..n]).into_owned()
-    }
-
-    fn assert_nothing_received(listener: &UdpSocket) {
-        let mut buf = [0u8; 64];
-        assert!(listener.recv(&mut buf).is_err(), "unexpected datagram");
-    }
-
-    #[test]
-    fn motion_key_is_sent_when_unlocked() {
-        let (command, listener) = loopback_link();
-        let safety = SafetyLock::default();
-
-        let resp = set_motion_key(&command, &safety, "0");
-        assert!(resp.success);
-        assert_eq!(resp.message, "Motion key sent");
-        assert_eq!(recv(&listener), "MODE Z\n");
-
-        let resp = set_motion_key(&command, &safety, protocol::ESTOP_KEY);
-        assert!(resp.success);
-        assert_eq!(resp.message, "Emergency stop sent");
-        assert_eq!(recv(&listener), "ESTOP\n");
-    }
-
-    #[test]
-    fn unknown_motion_key_sends_nothing() {
-        let (command, listener) = loopback_link();
-        let safety = SafetyLock::default();
-
-        let resp = set_motion_key(&command, &safety, "9");
-        assert!(!resp.success);
-        assert_eq!(resp.message, "Unknown motion key '9'");
-        assert_nothing_received(&listener);
-    }
-
-    #[test]
-    fn safety_lock_lies_down_once_and_only_lets_estop_through() {
-        let (command, listener) = loopback_link();
-        let safety = SafetyLock::default();
-        let logger = Logger::default();
-
-        safety.trigger("test", &command, &logger);
-        safety.trigger("test again", &command, &logger);
-        assert!(safety.is_engaged());
-        assert_eq!(recv(&listener), protocol::LIE_DOWN_COMMAND);
-        assert_nothing_received(&listener);
-
-        let resp = set_motion_key(&command, &safety, "1");
-        assert!(!resp.success);
-        assert_eq!(resp.message, "LOCKED");
-        assert_nothing_received(&listener);
-
-        let resp = set_motion_key(&command, &safety, protocol::ESTOP_KEY);
-        assert!(resp.success);
-        assert_eq!(recv(&listener), "ESTOP\n");
-
-        assert!(safety.release());
-        assert!(!safety.release());
-        assert!(set_motion_key(&command, &safety, "1").success);
-        assert_eq!(recv(&listener), "MODE C\n");
-    }
-
-    #[test]
-    fn set_safety_lock_engages_silently_and_releases_with_a_controller_reset() {
-        let (command, listener) = loopback_link();
-        let safety = SafetyLock::default();
-        let logger = Logger::default();
-
-        // Releasing while this node is not locked still resets the controller, which may have
-        // locked itself
-        let resp = set_safety_lock(&command, &safety, &logger, false);
-        assert!(resp.success);
-        assert_eq!(
-            resp.message,
-            "Controller reset. Send motion key 0 to stand up."
-        );
-        assert!(!safety.is_engaged());
-        assert_eq!(recv(&listener), "RESET_SAFETY\n");
-
-        let resp = set_safety_lock(&command, &safety, &logger, true);
-        assert!(resp.success);
-        assert_eq!(resp.message, "Safety lock engaged. Remote control blocked.");
-        assert!(safety.is_engaged());
-
-        let resp = set_safety_lock(&command, &safety, &logger, true);
-        assert!(resp.success);
-        assert_eq!(resp.message, "System was already locked.");
-        assert!(safety.is_engaged());
-
-        // Engaging from outside sends no lie-down, but still gates motion keys
-        assert!(!set_motion_key(&command, &safety, "1").success);
-        assert_nothing_received(&listener);
-
-        let resp = set_safety_lock(&command, &safety, &logger, false);
-        assert!(resp.success);
-        assert_eq!(
-            resp.message,
-            "Safety lock released and controller reset. Send motion key 0 to stand up."
-        );
-        assert!(!safety.is_engaged());
-        assert_eq!(recv(&listener), "RESET_SAFETY\n");
-        assert_nothing_received(&listener);
-    }
-}
+#[path = "tests/service.rs"]
+mod tests;

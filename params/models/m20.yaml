@@ -1,0 +1,44 @@
+# DEEP Robotics Lynx M20: loaded after driver_manager_params.yaml when the
+# INI's [system] robot_model is m20 (launch/driver_manager.launch.py), and wins
+# key by key. The G23's telemetry_* / command_* / scale_* are in g23.yaml,
+# which is not loaded on an M20, and the node does not even declare them when
+# robot_protocol is m20 (as it declares none of the keys below on a G23).
+#
+# Bare /** key for the same reason as the factory file (rclrs does not expand
+# /**/driver_manager).
+/**:
+  ros__parameters:
+    # Speak the M20's protocol (16-byte header + JSON, manual V0.0.9-0) instead
+    # of the G23 gait controller's ASCII. Only stand (motion key "0"), lie down
+    # ("2") and cmd_vel are implemented; every other key and service answers
+    # an error. Read first: it decides which robot's parameters are declared.
+    robot_protocol: "m20"
+
+    # The motion host's UDP protocol server, on the robot's internal LAN.
+    motion_host_ip: "10.21.31.103"
+    motion_host_port: 30000
+
+    # The axis command is a fraction [-1, 1] of the gait's maximum speed, so
+    # these are the cmd_vel values that map to a full-scale command. UNMEASURED:
+    # picked above what the basic gait is likely to reach, so a command maps
+    # to a smaller fraction than it should, never a larger one. Calibrate them
+    # against /odom the way the G23's scale_* were (hold a few plateaus, divide).
+    max_vx: 2.0    # m/s
+    max_vy: 1.0    # m/s
+    max_wz: 2.0    # rad/s
+
+    # cmd_vel is re-sent at 20 Hz (the manual's rate) while younger than this,
+    # then the robot is sent zero three times. The backend's teleop publishes at
+    # ~10 Hz and the controller at 20 Hz, so 0.3 s rides out two lost messages.
+    cmd_timeout: 0.3
+
+    # The M20's lidar is the vendor stack's, not a Livox driver of ours: both
+    # lidars merged into one PointCloud2 on /LIDAR/POINTS_UDP, and its IMU on
+    # /IMU, published on DDS domain 0 from the robot's other computers with NO
+    # namespace. The names are absolute for that reason (a relative name would
+    # resolve to /<robot_id>/LIDAR/POINTS_UDP and the row would read NO DATA
+    # forever) — the one place this node names a topic outside /<robot_id>, and
+    # only because the publisher is not ours.
+    monitor_lidar_topic: "/LIDAR/POINTS_UDP"
+    monitor_lidar_type: "pointcloud2"
+    monitor_imu_topic: "/IMU"

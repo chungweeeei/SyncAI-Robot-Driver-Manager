@@ -7,8 +7,9 @@ must stay identical to the C++ version** (node name, executable name, parameter 
 message types, QoS, service names): `syncai_robot_state` and `syncai_backend` both depend on it.
 When behaviour is in doubt, the C++ version is authoritative. Deliberate exceptions: the added
 `safety_locked` topic, `set_safety_lock` (`std_srvs/SetBool`), which replaces `reset_safety`, and
-the sensor monitor (subscriptions to `livox/lidar`, `livox/imu`, `image_raw/compressed`, a status
-table on stdout, five `monitor_*` parameters) — it adds readers only, no published interface.
+the sensor monitor (subscriptions to the lidar cloud / IMU named by `monitor_lidar_topic` /
+`monitor_imu_topic` and to `image_raw/compressed`, a status table on stdout, eight `monitor_*`
+parameters) — it adds readers only, no published interface.
 
 **The repo root is the package itself** (`package.xml` and `Cargo.toml` are at the root); the
 Workspace pulls it into `src/syncai_driver_manager` with vcstool (replacing the C++ version).
@@ -57,21 +58,48 @@ docker exec syncai-ros2-rust bash -lc 'cd /workspace/src/syncai_driver_manager &
 
 | File | Responsibility |
 | --- | --- |
-| `mod.rs` | Wiring: parameters → two UDP sockets → workers / services / telemetry thread |
-| `protocol.rs` | **Pure functions** for packet <-> struct; no sockets / Node / ROS message types; its unit tests live here |
-| `parameters.rs` | Velocity gains (`MandatoryParameter`, >= 0), UDP addresses (`ReadOnlyParameter`) |
+| `mod.rs` | Wiring: `robot_protocol` → that robot's parameters and link (G23: two UDP sockets + telemetry thread; M20: `M20Link`) → workers / services / monitor |
+| `protocol.rs` | **Pure functions** for packet <-> struct; no sockets / Node / ROS message types; unit tested (`tests/protocol.rs`) |
+| `parameters.rs` | `RobotProtocol` (declared first), `G23Parameters` (UDP, read-only) + `VelocityScale` (`MandatoryParameter`, >= 0), `M20Parameters` (read-only), `MonitorConfig` (both robots) |
 | `session.rs` | UDP sockets (telemetry `listen`, command `connect`) |
 | `command.rs` | `CommandLink` (sends ASCII commands), `SafetyLock` (no automatic trigger yet; `set_safety_lock` engages / releases it, and its release also sends the controller `RESET_SAFETY`) |
 | `telemetry.rs` | `std::thread` that receives packets, parses them and publishes ROS messages |
 | `health.rs` | **Pure** sensor bookkeeping (`SensorHealth`: rates, statuses, the stdout table); unit tested |
 | `monitor.rs` | Lidar / camera subscriptions (counted only) and the `monitor` thread that prints the table |
 | `publishers.rs` / `subscriber.rs` / `service.rs` | ROS interfaces |
+| `drive.rs` | `Drive`: which robot the ROS interfaces drive, picked by `robot_protocol` (`g23` / `m20`) |
+| `m20_protocol.rs` | **Pure** Lynx M20 functions (16-byte header + JSON, key → `MotionParam`, cmd_vel → axis ratio); unit tested |
+| `m20_link.rs` | `M20Link`: one UDP socket to the M20, a send thread (2 Hz heartbeat, 20 Hz axis command with a cmd_vel timeout) and a receive thread (logs `MotionState`) |
+
+**Params files.** `params/driver_manager_params.yaml` holds only what every model shares (the
+monitor's period and timeouts); everything that is one robot's is in
+`params/models/<robot_model>.yaml`, which the launch loads after it (`robot_model` from the INI,
+`g23` when missing). `g23.yaml`: `robot_protocol`, the UDP endpoints, the Livox monitor topics and
+`scale_*`; `m20.yaml`: `robot_protocol`, `motion_host_*`, `max_*`, `cmd_timeout` and the vendor's
+monitor topics. The launch **refuses a model with no file** (the code defaults would bind on
+`0.0.0.0:50012` with every scale 1.0 and look healthy). A new robot-specific key goes in the model
+files, not the shared one.
+
+With `robot_protocol: m20` (the launch loads `params/models/m20.yaml` when the INI says
+`robot_model: m20`) neither G23 socket nor the telemetry thread exists, and the G23's
+`telemetry_*` / `command_*` / `scale_*` are not declared (nor the M20's `motion_host_*` / `max_*` /
+`cmd_timeout` on a G23: `robot_protocol` is declared first and picks the set; the G23's
+`VelocityScale` lives in `Drive::G23`); only motion keys "0" / "2" and `cmd_vel` do anything, every
+other call answers `success: false`. The M20's lidar topics are absolute (`/LIDAR/POINTS_UDP`,
+`/IMU`) because its vendor stack publishes them without a namespace — the only names this node
+uses outside `/<robot_id>`. The M20's motion host is `10.21.31.103:30000` on its internal LAN:
+**the same real-robot rule applies to it** — test against `motion_host_ip:=127.0.0.1`.
 
 Threads: `cmd_vel` has one rclrs Worker, and the four services share one Worker (equivalent to the
 C++ version's two MutuallyExclusive callback groups; the two workers run in parallel). Telemetry has
-its own `std::thread`. The lidar / camera subscriptions have a third Worker, and the status table
+its own `std::thread` on a G23; on an M20, `M20Link` has two (send, receive) instead. The lidar / camera subscriptions have a third Worker, and the status table
 its own `std::thread`; all of them write or read the shared `Arc<SensorHealth>`. New packet parsing
 logic goes in `protocol.rs`, with unit tests.
+
+Unit tests live in `src/driver_manager_node/tests/<module>.rs`, one file per module, and each module
+ends with `#[cfg(test)] #[path = "tests/<module>.rs"] mod tests;`. They stay unit tests (a child
+module, so `use super::*` reaches private items); the repo-root `tests/` that Cargo uses for
+integration tests is not used, because this crate is bin-only and has no public API to test.
 
 ## rclrs pitfalls (all hit in practice)
 

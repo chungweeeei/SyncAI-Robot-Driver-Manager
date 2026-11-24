@@ -49,8 +49,9 @@ ros2 launch syncai_driver_manager driver_manager.launch.py
 Without VS Code, use the [devcontainer CLI](https://github.com/devcontainers/cli):
 `devcontainer up --workspace-folder .`, then `docker exec -it syncai-ros2-rust bash -l`.
 
-The defaults in `params/driver_manager_params.yaml` are the real robot's addresses (receive on
-`192.168.1.103:50010`, send to `192.168.1.120:50051`). Without that NIC the bind fails and the node
+The G23's addresses in `params/models/g23.yaml` are the real robot's (receive on
+`192.168.1.103:50010`, send to `192.168.1.120:50051`); the code defaults without any params
+file are `0.0.0.0:50012` and `192.168.1.120:50051`. Without that NIC the bind fails and the node
 exits. When not connected to the robot, use loopback:
 
 ```bash
@@ -106,13 +107,15 @@ cargo test --target-dir /workspace/build/.clippy
 ├── package.xml
 ├── Cargo.toml / Cargo.lock
 ├── rustfmt.toml / clippy.toml / .editorconfig  # formatting and lint settings
-├── launch/driver_manager.launch.py   # reads robot_id from system.ini as the namespace
-├── params/driver_manager_params.yaml # UDP addresses and velocity correction gains
+├── launch/driver_manager.launch.py   # robot_id (namespace) and robot_model (params file) from system.ini
+├── params/driver_manager_params.yaml # what every model shares: the monitor's period and timeouts
+├── params/models/g23.yaml  # G23: protocol, UDP addresses, Livox topics, velocity correction gains
+├── params/models/m20.yaml  # Lynx M20: protocol, motion host, axis full scale, vendor lidar topics
 ├── src/
 │   ├── main.rs
 │   └── driver_manager_node/
 │       ├── mod.rs          # wiring: parameters → sockets → pub/sub/service → telemetry thread
-│       ├── parameters.rs   # velocity gains (dynamically settable), UDP addresses (read-only)
+│       ├── parameters.rs   # robot_protocol, then that robot's set: G23 (UDP, gains) or M20; monitor
 │       ├── protocol.rs     # pure packet <-> struct functions; cargo test needs no ROS
 │       ├── session.rs      # UDP sockets
 │       ├── command.rs      # send commands to the controller, safety lock
@@ -120,8 +123,12 @@ cargo test --target-dir /workspace/build/.clippy
 │       ├── health.rs       # pure sensor bookkeeping: rates, statuses, the stdout table
 │       ├── monitor.rs      # lidar / camera subscriptions + the status-table thread
 │       ├── publishers.rs   # imu / motor_states (+ _low_rate) / battery_state / mode / safety_locked
-│       ├── subscriber.rs   # cmd_vel -> AXES
-│       └── service.rs      # set_motion_key / set_policy_mode / set_speed_scale / set_safety_lock
+│       ├── subscriber.rs   # cmd_vel -> AXES (G23) / the M20 link
+│       ├── drive.rs        # which robot: G23 (CommandLink) or M20 (M20Link)
+│       ├── m20_protocol.rs # pure Lynx M20 header + JSON functions; cargo test needs no ROS
+│       ├── m20_link.rs     # the M20 socket: heartbeat, 20 Hz axis command, status log
+│       ├── service.rs      # set_motion_key / set_policy_mode / set_speed_scale / set_safety_lock
+│       └── tests/          # unit tests, one file per module (included with #[path])
 │
 │   # Only for developing this repo on its own; SyncAI-Robot-Workspace does not use these
 ├── interface.repos         # vcstool list: where the shared syncai_common messages come from
@@ -173,9 +180,57 @@ C++ README is authoritative.
 | Direction | Interface |
 | --- | --- |
 | Publishes | `imu` (`syncai_common/IMUState`, SensorData), `motor_states` (`syncai_common/MotorStates`, SensorData), `motor_states_low_rate` (the same messages thinned to 20 Hz, SensorData; what `syncai_robot_state` and the backend subscribe — `motor_states` stays at the telemetry rate, ~200 Hz), `battery_state` (`sensor_msgs/BatteryState`, reliable depth 10), `mode` (`std_msgs/Int32MultiArray`, reliable depth 10), `safety_locked` (`std_msgs/Bool`, reliable + transient local depth 1; published at startup and whenever the safety lock changes; **Rust-only addition**, not in the C++ version) |
-| Subscribes | `cmd_vel` (`geometry_msgs/Twist`) → `AXES vx vy wz`; dropped (nothing sent) while the safety lock is engaged. For the sensor monitor only (**Rust-only addition**, counted, never used): `livox/lidar` (`livox_ros_driver2/CustomMsg`), `livox/imu` (`sensor_msgs/Imu`), `image_raw/compressed` (`sensor_msgs/CompressedImage`), all best-effort |
+| Subscribes | `cmd_vel` (`geometry_msgs/Twist`) → `AXES vx vy wz`; dropped (nothing sent) while the safety lock is engaged. For the sensor monitor only (**Rust-only addition**, counted, never used): `monitor_lidar_topic` (default `livox/lidar`, `livox_ros_driver2/CustomMsg` or `sensor_msgs/PointCloud2` by `monitor_lidar_type`), `monitor_imu_topic` (default `livox/imu`, `sensor_msgs/Imu`), `image_raw/compressed` (`sensor_msgs/CompressedImage`), all best-effort |
 | Services | `set_motion_key`, `set_policy_mode`, `set_speed_scale`, `set_safety_lock` (`std_srvs/SetBool`: `true` engages the safety lock without sending any command, `false` releases it **and always sends `RESET_SAFETY`**, which clears the controller's own lock; **replaces the C++ version's `reset_safety`** (`std_srvs/Trigger`), so callers of `reset_safety` must switch) |
-| Parameters | `telemetry_recv_ip/port`, `command_target_ip/port` (read-only), `scale_fwd` / `scale_back` / `scale_left` / `scale_right` / `scale_turn_l` / `scale_turn_r` (>= 0, changeable at runtime with `ros2 param set` or `set_speed_scale`; never written back to the YAML), `monitor_report_period` / `monitor_telemetry_timeout` / `monitor_lidar_timeout` / `monitor_camera_timeout` / `monitor_command_idle` (seconds, read-only; see below) |
+| Parameters | `robot_protocol` (`g23` / `m20`, read-only, declared first: only that robot's own parameters are declared). G23 only: `telemetry_recv_ip/port`, `command_target_ip/port` (read-only), `scale_fwd` / `scale_back` / `scale_left` / `scale_right` / `scale_turn_l` / `scale_turn_r` (>= 0, changeable at runtime with `ros2 param set` or `set_speed_scale`; never written back to the YAML). M20 only: `motion_host_ip/port`, `max_vx` / `max_vy` / `max_wz`, `cmd_timeout` (read-only; see "Driving a Lynx M20"). Both: `monitor_report_period` / `monitor_telemetry_timeout` / `monitor_lidar_timeout` / `monitor_camera_timeout` / `monitor_command_idle` (seconds, read-only; see below), `monitor_lidar_topic` / `monitor_lidar_type` / `monitor_imu_topic` (read-only; see below) |
+
+### Params files and robot models
+
+The launch passes two files, the second winning key by key:
+
+| File | Holds |
+| --- | --- |
+| `params/driver_manager_params.yaml` (`params_file:=`) | what every model shares: the sensor monitor's period and timeouts |
+| `params/models/<robot_model>.yaml` | everything that is one robot's: `g23.yaml` the protocol, UDP endpoints, Livox topics and velocity scales; `m20.yaml` the protocol, motion host, axis full scale and the vendor's lidar topics |
+
+`<robot_model>` is `[system] robot_model` of the system INI, read as `g23` (with a warning) when the
+key is missing, as the Workspace's own launches read it. **A model with no file is refused**: the
+launch raises instead of starting the node on the code defaults (telemetry `0.0.0.0:50012`, every
+scale 1.0), which would bind, look healthy and never hear the controller. Adding a model means
+adding its file here.
+
+Run without the launch (`ros2 run`), only the code defaults apply, and they are not robot01's for
+the G23 keys either; pass the model file with `--params-file` or the values with `-p`.
+
+### Driving a Lynx M20 (`robot_protocol: m20`)
+
+The same node drives DEEP Robotics' Lynx M20 when `robot_protocol` is `m20`. The launch sets it by
+loading `params/models/m20.yaml` after the factory params when the system INI's
+`[system] robot_model` is `m20`, so the session spec is the same for both robots. The ROS
+interface does not change; what is behind it does:
+
+| ROS call | Sent to the M20 (UDP `motion_host_ip:motion_host_port`, 16-byte header + JSON) |
+| --- | --- |
+| `set_motion_key "0"` (stand) | axis zero, usage mode Regular (`1101/5 Mode 0`), then motion state `2/22 MotionParam 1` |
+| `set_motion_key "2"` (lie down) | axis zero, then `2/22 MotionParam 4` |
+| `cmd_vel` | axis command `2/21`: X = `linear.x / max_vx`, Y = `linear.y / max_vy`, Yaw = `angular.z / max_wz`, each clamped to [-1, 1]; re-sent at 20 Hz while younger than `cmd_timeout`, then zero three times |
+| every other motion key, `set_policy_mode`, `set_safety_lock` | nothing sent; `success: false` with "Not supported on the M20" |
+| `set_speed_scale` | nothing changed; `success: false` |
+
+A heartbeat (`100/100`) goes out every 500 ms from start-up, followed once by Regular mode: the
+robot reports its status only to an address that keeps sending heartbeats, and honours axis
+commands only in Regular mode. The node logs each change of the reported `MotionState` (e.g.
+`[M20] MotionState 1 (stand)`) and counts the robot's datagrams in the monitor's telemetry row;
+it publishes none of the G23 topics (`imu`, `motor_states`, `battery_state`, `mode`), and opens
+neither G23 socket.
+
+`max_*` are unmeasured: the defaults (2.0 m/s, 1.0 m/s, 2.0 rad/s) are chosen so a command
+maps to a smaller fraction of full speed than intended, never a larger one. The protocol source is
+the "Lynx M20 Series Software Development Manual (Beta)" V0.0.9-0; the ASDU's `Time` is sent in
+UTC, not local time, for want of a time zone database in std.
+
+Testing without the robot: `-p robot_protocol:=m20 -p motion_host_ip:=127.0.0.1` and a UDP listener
+on 30000; **never point it at `10.21.31.103` with the robot in reach of people**.
 
 ### Sensor status on stdout
 
@@ -196,7 +251,7 @@ glance:
 | --- | --- | --- |
 | `telemetry` | datagrams on the telemetry socket | `NO DATA` (never), `OK`, `STALE` (none for `monitor_telemetry_timeout`) |
 | `command` | sends on the command socket | `IDLE` (nothing sent for `monitor_command_idle`: normal while nobody drives), `OK`, `ERROR` (a send failed within the last 2 s, e.g. ICMP port unreachable). UDP has no ack, so the controller can never be shown as down from this side |
-| `lidar` | `livox/lidar` and `livox/imu` | the worse of the two (they arrive on different UDP ports from the MID360): `NO DATA`, `OK`, `STALE` (`monitor_lidar_timeout`) |
+| `lidar` | `monitor_lidar_topic` and `monitor_imu_topic` (G23: `livox/lidar` CustomMsg and `livox/imu`; M20: `/LIDAR/POINTS_UDP` PointCloud2 and `/IMU`, absolute because the vendor publishes them without a namespace; `monitor_lidar_type` `livox` / `pointcloud2` picks the cloud's message type) | the worse of the two (they arrive as separate streams): `NO DATA`, `OK`, `STALE` (`monitor_lidar_timeout`) |
 | `camera` | `image_raw/compressed` from `syncai_camera_feeder` | `NO DATA`, `OK`, `STALE` (`monitor_camera_timeout`) |
 
 Rates are counts over the last 2 s. A change of status is logged the moment it happens (checked
@@ -213,7 +268,8 @@ point CustomMsg at 10 Hz, a JPEG at 30 Hz): rclrs has no serialized subscription
 | --- | --- | --- |
 | `cmd_vel` | its own rclrs Worker | `cmd_vel_cb_group_` |
 | The four services | one shared Worker, run one at a time | `services_cb_group_` |
-| Telemetry receive | its own `std::thread`, outside the executor | same |
+| Telemetry receive (G23) | its own `std::thread`, outside the executor | same |
+| M20 send / receive (M20) | two `std::thread`s in `M20Link`: heartbeat + 20 Hz axis command, status | — (Rust-only) |
 | Lidar / camera subscriptions | one rclrs Worker of their own | — (Rust-only) |
 | Status table | its own `std::thread` (`monitor`) | — (Rust-only) |
 
@@ -254,8 +310,10 @@ thread-safe: the gains are ROS parameters, the safety lock is an `AtomicBool`, a
 cd /workspace/src/syncai_driver_manager && cargo test --target-dir /workspace/build/.clippy
 ```
 
-`protocol.rs` and `health.rs` are pure functions, so their unit tests need neither a ROS
-environment nor the robot. For end-to-end tests use loopback
+The unit tests are in `src/driver_manager_node/tests/`, one file per module, each included at the
+end of its module with `#[cfg(test)] #[path = "tests/<module>.rs"] mod tests;`, so they can still
+test private functions. `protocol.rs`, `m20_protocol.rs` and `health.rs` are pure functions, so
+their unit tests need neither a ROS environment nor the robot. For end-to-end tests use loopback
 (`-p telemetry_recv_ip:=127.0.0.1 -p command_target_ip:=127.0.0.1` plus different ports) and a
 separate `ROS_DOMAIN_ID`, and **never send commands to `192.168.1.120`**: that is the real robot's
 controller.
