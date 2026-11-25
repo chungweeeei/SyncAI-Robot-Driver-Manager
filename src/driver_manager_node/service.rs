@@ -51,10 +51,7 @@ impl Services {
                             message: "Policy updated".into(),
                         }
                     }
-                    Drive::M20(_) => SetPolicyMode_Response {
-                        success: false,
-                        message: M20_UNSUPPORTED.into(),
-                    },
+                    Drive::M20(m20) => set_policy_mode_m20(m20, &ctx.safety, req.mode),
                 },
             )?,
             _set_motion_key: worker.create_service::<SetMotionKey, _>(
@@ -134,6 +131,28 @@ fn set_motion_key_m20(m20: &M20Link, safety: &SafetyLock, key: &str) -> SetMotio
         None => response(
             false,
             format!("Motion key '{key}' is not supported on the M20 (0 stand, 2 lie down)"),
+        ),
+    }
+}
+
+/// The M20's `set_policy_mode`: a gait switch, 0 the flat (Basic) gait and 1 the stair gait
+/// (`m20_protocol::gait_param_for_policy`). Every other mode is refused with nothing sent.
+/// Gated by the safety lock like a motion key, since a gait switch changes how the robot moves.
+fn set_policy_mode_m20(m20: &M20Link, safety: &SafetyLock, mode: u8) -> SetPolicyMode_Response {
+    let response = |success: bool, message: String| SetPolicyMode_Response { success, message };
+
+    if safety.is_engaged() {
+        return response(false, "LOCKED".into());
+    }
+
+    match m20_protocol::gait_param_for_policy(mode) {
+        Some(param) => {
+            m20.set_gait(param);
+            response(true, format!("Gait switch sent (GaitParam {param:#06x})"))
+        }
+        None => response(
+            false,
+            format!("Policy mode {mode} is not supported on the M20 (0 flat, 1 stairs)"),
         ),
     }
 }

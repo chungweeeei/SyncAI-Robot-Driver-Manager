@@ -148,6 +148,14 @@ impl M20Link {
         }
         self.shared.send(m20::MOTION_STATE, &m20::motion_state_items(param));
     }
+
+    /// Sends one gait switch (`GaitParam`), once, with no acknowledgement: the receive thread
+    /// logs the `Gait` the robot then reports. The axis command is left alone — unlike a stand
+    /// or lie-down, a gait switch is not a reason to stop, and the controllers' stair mode
+    /// already stands still before it asks for one.
+    pub fn set_gait(&self, param: i32) {
+        self.shared.send(m20::GAIT, &m20::gait_items(param));
+    }
 }
 
 impl Drop for M20Link {
@@ -234,6 +242,7 @@ impl Shared {
     fn recv_loop(&self, socket: &UdpSocket) {
         let mut buf = [0u8; 65_535];
         let mut last_state: Option<i64> = None;
+        let mut last_gait: Option<i64> = None;
 
         while self.running.load(Ordering::Relaxed) {
             let n = match socket.recv(&mut buf) {
@@ -260,16 +269,25 @@ impl Shared {
 
             let asdu = m20::parse_packet(&buf[..n]);
             self.health.record_telemetry(self.config.target, asdu.is_none());
-            let Some(state) = asdu.and_then(m20::reported_motion_state) else {
+            let Some(asdu) = asdu else {
                 continue;
             };
-            if last_state != Some(state) {
-                log_info!(
-                    &self.logger,
-                    "[M20] MotionState {state} ({})",
-                    m20::motion_state_name(state),
-                );
-                last_state = Some(state);
+            if let Some(state) = m20::reported_motion_state(asdu) {
+                if last_state != Some(state) {
+                    log_info!(
+                        &self.logger,
+                        "[M20] MotionState {state} ({})",
+                        m20::motion_state_name(state),
+                    );
+                    last_state = Some(state);
+                }
+            }
+            // How a set_policy_mode is checked: the robot's own word for the gait it is in
+            if let Some(gait) = m20::reported_gait(asdu) {
+                if last_gait != Some(gait) {
+                    log_info!(&self.logger, "[M20] Gait {gait} ({})", m20::gait_name(gait));
+                    last_gait = Some(gait);
+                }
             }
         }
     }

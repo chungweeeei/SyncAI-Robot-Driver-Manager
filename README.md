@@ -218,13 +218,15 @@ interface does not change; what is behind it does:
 | `set_motion_key "0"` (stand) | axis zero, usage mode Regular (`1101/5 Mode 0`), then motion state `2/22 MotionParam 1` |
 | `set_motion_key "2"` (lie down) | axis zero, then `2/22 MotionParam 4` |
 | `cmd_vel` | axis command `2/21`: X = `linear.x / max_vx`, Y = `linear.y / max_vy`, Yaw = `angular.z / max_wz`, each clamped to [-1, 1]; re-sent at 20 Hz while younger than `cmd_timeout`, then zero three times |
-| every other motion key, `set_policy_mode`, `set_safety_lock` | nothing sent; `success: false` with "Not supported on the M20" |
+| `set_policy_mode 0` (flat) / `1` (stairs) | gait switch `2/23 GaitParam` 0x1001 (Basic) / 0x1003 (Stair), the standard gaits; sent once, the axis command untouched. Refused (`LOCKED`) while the safety lock is engaged |
+| every other motion key, every other `set_policy_mode`, `set_safety_lock` | nothing sent; `success: false` |
 | `set_speed_scale` | nothing changed; `success: false` |
 
 A heartbeat (`100/100`) goes out every 500 ms from start-up, followed once by Regular mode: the
 robot reports its status only to an address that keeps sending heartbeats, and honours axis
 commands only in Regular mode. The node logs each change of the reported `MotionState` (e.g.
-`[M20] MotionState 1 (stand)`) and counts the robot's datagrams in the monitor's telemetry row;
+`[M20] MotionState 1 (stand)`) and `Gait` (`[M20] Gait 14 (stair)`: the report numbers the gaits 1 / 14,
+not as the `GaitParam` sent; how a `set_policy_mode` is checked) and counts the robot's datagrams in the monitor's telemetry row;
 it publishes none of the other G23 topics (`imu`, `motor_states`, `mode`), and opens neither G23
 socket.
 

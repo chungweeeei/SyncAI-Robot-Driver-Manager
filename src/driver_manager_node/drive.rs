@@ -18,7 +18,8 @@ pub enum Drive {
         command: CommandLink,
         scale: VelocityScale,
     },
-    /// DEEP Robotics' Lynx M20 (`m20_protocol.rs`): stand, lie down and cmd_vel only
+    /// DEEP Robotics' Lynx M20 (`m20_protocol.rs`): stand, lie down, cmd_vel and the gait switch
+    /// (`set_policy_mode` 0 flat / 1 stairs) only
     M20(M20Link),
 }
 

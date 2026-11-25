@@ -72,8 +72,8 @@ docker exec syncai-ros2-rust bash -lc 'cd /workspace/src/syncai_driver_manager &
 | `monitor.rs` | Lidar / camera subscriptions (counted only) and the `monitor` thread that prints the table |
 | `publishers.rs` / `subscriber.rs` / `service.rs` | ROS interfaces |
 | `drive.rs` | `Drive`: which robot the ROS interfaces drive, picked by `robot_protocol` (`g23` / `m20`) |
-| `m20_protocol.rs` | **Pure** Lynx M20 functions (16-byte header + JSON, key → `MotionParam`, cmd_vel → axis ratio); unit tested |
-| `m20_link.rs` | `M20Link`: one UDP socket to the M20, a send thread (2 Hz heartbeat, 20 Hz axis command with a cmd_vel timeout) and a receive thread (logs `MotionState`) |
+| `m20_protocol.rs` | **Pure** Lynx M20 functions (16-byte header + JSON, key → `MotionParam`, policy mode → `GaitParam`, cmd_vel → axis ratio); unit tested |
+| `m20_link.rs` | `M20Link`: one UDP socket to the M20, a send thread (2 Hz heartbeat, 20 Hz axis command with a cmd_vel timeout) and a receive thread (logs `MotionState` and `Gait`) |
 | `m20_battery.rs` | **Pure**: the M20's `/BATTERY_DATA` packs combined into one `protocol::Battery`; unit tested |
 | `m20_battery_forwarder.rs` | M20 only: subscribes `battery_topic` (`drdds/msg/BatteryData`) on its own Worker and publishes `battery_state` with the G23's builder (`publishers::battery_state_msg`) |
 
@@ -90,8 +90,9 @@ With `robot_protocol: m20` (the launch loads `params/models/m20.yaml` when the I
 `robot_model: m20`) neither G23 socket nor the telemetry thread exists, and the G23's
 `telemetry_*` / `command_*` / `scale_*` are not declared (nor the M20's `motion_host_*` / `max_*` /
 `cmd_timeout` / `battery_topic` on a G23: `robot_protocol` is declared first and picks the set; the G23's
-`VelocityScale` lives in `Drive::G23`); only motion keys "0" / "2" and `cmd_vel` do anything, every
-other call answers `success: false`. `battery_state` is published on **both** robots, from one
+`VelocityScale` lives in `Drive::G23`); only motion keys "0" / "2", `set_policy_mode` 0 / 1 (the
+Basic / Stair gait, `2/23 GaitParam` 0x1001 / 0x1003) and `cmd_vel` do anything, every other call
+answers `success: false`. `battery_state` is published on **both** robots, from one
 builder (`publishers::battery_state_msg`): on a G23 from the telemetry's `BMS_V2`, on an M20 from
 the vendor's `/BATTERY_DATA` (two packs combined, `m20_battery.rs`); keep the two identical in
 topic, type and QoS, since `syncai_robot_state` and charge.xml's `WaitForCharging` read either.

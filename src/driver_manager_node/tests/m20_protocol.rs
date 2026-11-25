@@ -76,6 +76,32 @@ fn motion_state_is_read_from_a_basic_status_report() {
 }
 
 #[test]
+fn only_flat_and_stair_policy_modes_map() {
+    assert_eq!(gait_param_for_policy(0), Some(0x1001));
+    assert_eq!(gait_param_for_policy(1), Some(0x1003));
+    assert_eq!(gait_param_for_policy(2), None);
+    assert_eq!(gait_param_for_policy(255), None);
+}
+
+#[test]
+fn gait_switch_is_type_2_command_23_with_a_decimal_gait_param() {
+    assert_eq!(gait_items(GAIT_PARAM_STAIRS), r#"{"GaitParam":4099}"#);
+    assert_eq!(
+        asdu(GAIT, "t", &gait_items(GAIT_PARAM_BASIC)),
+        r#"{"PatrolDevice":{"Type":2,"Command":23,"Time":"t","Items":{"GaitParam":4097}}}"#
+    );
+}
+
+#[test]
+fn gait_is_read_from_a_basic_status_report() {
+    let report = r#"{"PatrolDevice":{"Type":1002,"Command":6,"Time":"t","Items":{"BasicStatus":{"MotionState":17,"Gait": 14}}}}"#;
+    assert_eq!(reported_gait(report), Some(14));
+    assert_eq!(gait_name(14), "stair");
+    assert_eq!(gait_name(1), "basic");
+    assert_eq!(reported_gait(r#"{"MotionState":1}"#), None);
+}
+
+#[test]
 fn timestamp_is_utc_civil_time() {
     assert_eq!(timestamp(0), "1970-01-01 00:00:00");
     assert_eq!(timestamp(1_700_000_000), "2023-11-14 22:13:20");

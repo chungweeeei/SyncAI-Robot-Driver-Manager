@@ -13,9 +13,9 @@
 //! {"PatrolDevice":{"Type":<u32>,"Command":<u32>,"Time":"YYYY-MM-DD HH:MM:SS","Items":{...}}}
 //! ```
 //!
-//! Only what stand / lie down / move needs is here: heartbeat (100/100), usage mode (1101/5),
-//! motion state (2/22) and the axis command (2/21), plus reading `MotionState` back out of the
-//! robot's basic status report (1002/6). The JSON is written by hand: every body is a fixed
+//! Only what stand / lie down / move / switch gait needs is here: heartbeat (100/100), usage mode
+//! (1101/5), motion state (2/22), the axis command (2/21) and the gait switch (2/23), plus reading
+//! `MotionState` and `Gait` back out of the robot's basic status report (1002/6). The JSON is written by hand: every body is a fixed
 //! shape of numbers, which keeps the package free of a serde dependency.
 
 /// The four synchronisation bytes every datagram starts with, in both directions
@@ -29,6 +29,10 @@ pub const HEARTBEAT: (u32, u32) = (100, 100);
 pub const USAGE_MODE: (u32, u32) = (1101, 5);
 pub const MOTION_STATE: (u32, u32) = (2, 22);
 pub const AXIS: (u32, u32) = (2, 21);
+/// Gait switch (manual 1.2.4). Not in DEEP Robotics' keyboard script, which only reads `Gait`
+/// back; the (Type, Command) and `GaitParam` values are the manual's, as an earlier in-house M20
+/// bridge (`robot_bridge`'s `send_gait_switch`) sent them.
+pub const GAIT: (u32, u32) = (2, 23);
 
 /// `Mode` of the usage-mode switch: axis commands are honoured only in Regular mode (0);
 /// Navigation mode (1) hands the robot to the vendor's own navigation, Assist (2) to its
@@ -51,6 +55,35 @@ pub fn motion_param_for_key(key: &str) -> Option<i32> {
         "0" => Some(MOTION_PARAM_STAND),
         "2" => Some(MOTION_PARAM_SIT),
         _ => None,
+    }
+}
+
+/// `GaitParam` of the gait switch: the standard (non-agile) Basic and Stair gaits, the two the
+/// axis command drives (manual 1.2.5). The manual's table also has the agile gaits, 0x3002 flat
+/// and 0x3003 stairs, which nothing here sends yet.
+pub const GAIT_PARAM_BASIC: i32 = 0x1001;
+pub const GAIT_PARAM_STAIRS: i32 = 0x1003;
+
+/// The `set_policy_mode` modes the M20 answers, mapped to its `GaitParam`: 0 the flat (Basic)
+/// gait, 1 the stair gait. 1 is what the controllers' stair mode sends (`stair_policy_mode: 1`,
+/// HIMLOCO on the G23), so the same call climbs on either robot. Every other mode is refused
+/// rather than guessed at.
+pub fn gait_param_for_policy(mode: u8) -> Option<i32> {
+    match mode {
+        0 => Some(GAIT_PARAM_BASIC),
+        1 => Some(GAIT_PARAM_STAIRS),
+        _ => None,
+    }
+}
+
+/// A human name for a reported `Gait`, for the log. The basic status report numbers its gaits
+/// differently from the `GaitParam` sent: DEEP Robotics' keyboard script reads 1 as Basic and 14
+/// as Stair, the only two it names.
+pub fn gait_name(gait: i64) -> &'static str {
+    match gait {
+        1 => "basic",
+        14 => "stair",
+        _ => "unknown",
     }
 }
 
@@ -92,6 +125,11 @@ pub fn usage_mode_items(mode: i32) -> String {
 
 pub fn motion_state_items(param: i32) -> String {
     format!("{{\"MotionParam\":{param}}}")
+}
+
+/// The gait switch's Items, `GaitParam` as a decimal number (JSON has no hex literal)
+pub fn gait_items(param: i32) -> String {
+    format!("{{\"GaitParam\":{param}}}")
 }
 
 /// The axis command's Items. Z / Roll / Pitch are always 0: only X, Y and Yaw act in the Basic
@@ -145,7 +183,18 @@ pub fn parse_packet(datagram: &[u8]) -> Option<&str> {
 /// and the manual's own sample of this report is not valid JSON (full-width colons), so a strict
 /// parser would buy nothing but a dependency.
 pub fn reported_motion_state(asdu: &str) -> Option<i64> {
-    let rest = &asdu[asdu.find("\"MotionState\"")? + "\"MotionState\"".len()..];
+    reported_integer(asdu, "MotionState")
+}
+
+/// `BasicStatus.Gait` out of a basic status report (1002/6), numbered as `gait_name` reads it
+pub fn reported_gait(asdu: &str) -> Option<i64> {
+    reported_integer(asdu, "Gait")
+}
+
+/// The bare integer after the first `"<key>":` in `asdu`
+fn reported_integer(asdu: &str, key: &str) -> Option<i64> {
+    let quoted = format!("\"{key}\"");
+    let rest = &asdu[asdu.find(&quoted)? + quoted.len()..];
     let rest = rest.trim_start().strip_prefix(':')?.trim_start();
     let end = rest
         .char_indices()
