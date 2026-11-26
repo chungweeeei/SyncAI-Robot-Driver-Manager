@@ -84,3 +84,25 @@ fn stand_sends_zero_regular_mode_and_motion_param() {
     // stand (at most one axis command already decided before the stand landed)
     assert!(count(&got[stand..], m20::AXIS) <= 1);
 }
+
+#[test]
+fn estop_sends_zero_and_soft_estop_and_keeps_the_link_up() {
+    let (link, robot) = loopback(Duration::from_millis(200));
+    collect(&robot, Duration::from_millis(100)); // the startup heartbeat / mode
+    link.set_velocity(1.0, 0.0, 0.0);
+    link.set_motion_state(m20::MOTION_PARAM_SOFT_ESTOP);
+    let got = collect(&robot, Duration::from_millis(1200));
+    let estop = got
+        .iter()
+        .position(|a| a.contains("\"MotionParam\":2"))
+        .expect("soft emergency stop sent");
+    assert!(got[..estop]
+        .iter()
+        .any(|a| a.contains("\"X\":0.0000,\"Y\":0.0000")));
+    // The link stays up as on the G23: heartbeats keep going after the stop
+    assert!(count(&got[estop..], m20::HEARTBEAT) >= 1, "got {got:?}");
+    // ...and a cmd_vel after it is forwarded again
+    link.set_velocity(0.5, 0.0, 0.0);
+    let after = collect(&robot, Duration::from_millis(150));
+    assert!(after.iter().any(|a| a.contains("\"X\":0.5000")), "got {after:?}");
+}

@@ -134,7 +134,9 @@ impl M20Link {
 
     /// Sends one motion-state switch (`MotionParam`). The current axis command and its trailing
     /// stops are dropped and one zero sent first, so the robot is not still being driven while it
-    /// stands up or lies down.
+    /// stands up, lies down or emergency-stops. The socket and the send thread are left as they
+    /// are for every switch, the soft emergency stop included: a cmd_vel after it is forwarded
+    /// again, as on the G23, where only the safety lock drops it.
     /// Standing also re-sends Regular mode first: axis commands are honoured only in it, and the
     /// robot's remote or app may have switched it since this node started.
     pub fn set_motion_state(&self, param: i32) {

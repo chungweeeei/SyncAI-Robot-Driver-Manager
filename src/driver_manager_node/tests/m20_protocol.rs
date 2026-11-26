@@ -41,10 +41,11 @@ fn foreign_or_truncated_datagrams_are_rejected() {
 }
 
 #[test]
-fn only_stand_and_lie_down_keys_map() {
+fn only_stand_lie_down_and_estop_keys_map() {
     assert_eq!(motion_param_for_key("0"), Some(1));
     assert_eq!(motion_param_for_key("2"), Some(4));
-    for key in ["1", "3", "4", "5", "", "x"] {
+    assert_eq!(motion_param_for_key("4"), Some(2));
+    for key in ["1", "3", "5", "", "x"] {
         assert_eq!(motion_param_for_key(key), None, "key {key:?}");
     }
 }

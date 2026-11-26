@@ -40,20 +40,25 @@ pub const GAIT: (u32, u32) = (2, 23);
 pub const USAGE_MODE_REGULAR: i32 = 0;
 
 /// `MotionParam` values of the motion-state switch this node sends (the manual's table also has
-/// Idle 0, Soft Emergency Stop 2, Power-on Damping 3 and Standard Motion State 6)
+/// Idle 0, Power-on Damping 3 and Standard Motion State 6)
 pub const MOTION_PARAM_STAND: i32 = 1;
+/// Soft Emergency Stop: the M20's counterpart of the G23's `ESTOP` (motion key 4). Like the
+/// G23's, it is one command on the link and nothing more: the socket, the heartbeat and the
+/// axis path stay up, so a stand (key 0) afterwards reaches the robot without a restart.
+pub const MOTION_PARAM_SOFT_ESTOP: i32 = 2;
 pub const MOTION_PARAM_SIT: i32 = 4;
 
 /// The `set_motion_key` keys the M20 answers, mapped to its `MotionParam`.
 ///
 /// The keys are the G23's (`syncai_common/SetMotionKey`, see `protocol::motion_key_command`),
-/// so a caller written for the G23 stands and lies the M20 down unchanged. Only those two have
-/// an M20 meaning so far; every other key (locomotion, damping, ESTOP, MPC) is refused rather
-/// than guessed at.
+/// so a caller written for the G23 stands, lies down and emergency-stops the M20 unchanged.
+/// Only those three have an M20 meaning so far; every other key (locomotion, damping, MPC) is
+/// refused rather than guessed at.
 pub fn motion_param_for_key(key: &str) -> Option<i32> {
     match key {
         "0" => Some(MOTION_PARAM_STAND),
         "2" => Some(MOTION_PARAM_SIT),
+        "4" => Some(MOTION_PARAM_SOFT_ESTOP),
         _ => None,
     }
 }

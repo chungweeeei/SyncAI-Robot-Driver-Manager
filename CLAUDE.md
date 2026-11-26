@@ -90,7 +90,7 @@ With `robot_protocol: m20` (the launch loads `params/models/m20.yaml` when the I
 `robot_model: m20`) neither G23 socket nor the telemetry thread exists, and the G23's
 `telemetry_*` / `command_*` / `scale_*` are not declared (nor the M20's `motion_host_*` / `max_*` /
 `cmd_timeout` / `battery_topic` on a G23: `robot_protocol` is declared first and picks the set; the G23's
-`VelocityScale` lives in `Drive::G23`); only motion keys "0" / "2", `set_policy_mode` 0 / 1 (the
+`VelocityScale` lives in `Drive::G23`); only motion keys "0" / "2" / "4" (ESTOP = `2/22 MotionParam 2`, Soft Emergency Stop; like the G23's, the link stays up), `set_policy_mode` 0 / 1 (the
 Basic / Stair gait, `2/23 GaitParam` 0x1001 / 0x1003) and `cmd_vel` do anything, every other call
 answers `success: false`. `battery_state` is published on **both** robots, from one
 builder (`publishers::battery_state_msg`): on a G23 from the telemetry's `BMS_V2`, on an M20 from

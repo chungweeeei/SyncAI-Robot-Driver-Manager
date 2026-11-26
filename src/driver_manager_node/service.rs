@@ -111,26 +111,36 @@ fn set_motion_key(command: &CommandLink, safety: &SafetyLock, key: &str) -> SetM
     }
 }
 
-/// The M20's `set_motion_key`: the G23's keys "0" (stand) and "2" (lie down) only, so the same
-/// calls stand and lie either robot down. Every other key is refused with nothing sent: the
-/// G23's locomotion / damping / MPC have no M20 counterpart, and ESTOP is not mapped yet.
+/// The M20's `set_motion_key`: the G23's keys "0" (stand), "2" (lie down) and "4" (ESTOP, the
+/// M20's Soft Emergency Stop), so the same calls drive either robot. Every other key is refused
+/// with nothing sent: the G23's locomotion / damping / MPC have no M20 counterpart.
+///
+/// ESTOP behaves as the G23's does: one command, the link left open (heartbeat and axis path
+/// keep running, so a later stand reaches the robot), the safety lock neither engaged by it nor
+/// able to hold it back.
 fn set_motion_key_m20(m20: &M20Link, safety: &SafetyLock, key: &str) -> SetMotionKey_Response {
     let response = |success: bool, message: String| SetMotionKey_Response { success, message };
 
     // Nothing engages the lock on the M20 today (set_safety_lock is refused); kept so a future
-    // trigger gates it the same way as on the G23
-    if safety.is_engaged() {
+    // trigger gates it the same way as on the G23, where only the emergency stop passes
+    if safety.is_engaged() && key != protocol::ESTOP_KEY {
         return response(false, "LOCKED".into());
     }
 
     match m20_protocol::motion_param_for_key(key) {
         Some(param) => {
             m20.set_motion_state(param);
-            response(true, "Motion key sent".into())
+            if key == protocol::ESTOP_KEY {
+                response(true, "Emergency stop sent".into())
+            } else {
+                response(true, "Motion key sent".into())
+            }
         }
         None => response(
             false,
-            format!("Motion key '{key}' is not supported on the M20 (0 stand, 2 lie down)"),
+            format!(
+                "Motion key '{key}' is not supported on the M20 (0 stand, 2 lie down, 4 ESTOP)"
+            ),
         ),
     }
 }

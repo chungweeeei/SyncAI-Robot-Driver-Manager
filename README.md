@@ -217,6 +217,7 @@ interface does not change; what is behind it does:
 | --- | --- |
 | `set_motion_key "0"` (stand) | axis zero, usage mode Regular (`1101/5 Mode 0`), then motion state `2/22 MotionParam 1` |
 | `set_motion_key "2"` (lie down) | axis zero, then `2/22 MotionParam 4` |
+| `set_motion_key "4"` (ESTOP) | axis zero, then `2/22 MotionParam 2` (Soft Emergency Stop). As on the G23 it is one command: the socket to the robot, the heartbeat and the axis path stay up (a later cmd_vel is forwarded again, a stand reaches the robot without a restart), the safety lock is not engaged by it and does not hold it back |
 | `cmd_vel` | axis command `2/21`: X = `linear.x / max_vx`, Y = `linear.y / max_vy`, Yaw = `angular.z / max_wz`, each clamped to [-1, 1]; re-sent at 20 Hz while younger than `cmd_timeout`, then zero three times |
 | `set_policy_mode 0` (flat) / `1` (stairs) | gait switch `2/23 GaitParam` 0x1001 (Basic) / 0x1003 (Stair), the standard gaits; sent once, the axis command untouched. Refused (`LOCKED`) while the safety lock is engaged |
 | every other motion key, every other `set_policy_mode`, `set_safety_lock` | nothing sent; `success: false` |
