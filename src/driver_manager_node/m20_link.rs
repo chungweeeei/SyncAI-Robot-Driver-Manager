@@ -24,13 +24,15 @@ const RECV_TIMEOUT: Duration = Duration::from_millis(100);
 const STOP_REPEATS: u8 = 3;
 
 /// Where the M20 is and how cmd_vel maps onto its axis command (see `M20Parameters`)
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct M20Config {
     pub target: SocketAddr,
     pub max_vx: f64,
     pub max_vy: f64,
     pub max_wz: f64,
     pub cmd_timeout: Duration,
+    /// The yaw dead band's compensation, applied before `max_wz` (see `m20::YawMap`)
+    pub yaw_map: m20::YawMap,
 }
 
 /// The link to a DEEP Robotics Lynx M20: one UDP socket, connected to the robot, used both to
@@ -126,7 +128,7 @@ impl M20Link {
         let velocity = Velocity {
             x: m20::velocity_ratio(vx, c.max_vx),
             y: m20::velocity_ratio(vy, c.max_vy),
-            yaw: m20::velocity_ratio(wz, c.max_wz),
+            yaw: m20::velocity_ratio(c.yaw_map.compensate(wz), c.max_wz),
             received: Instant::now(),
         };
         self.shared.axis().velocity = Some(velocity);

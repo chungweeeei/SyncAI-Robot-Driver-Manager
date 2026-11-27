@@ -15,6 +15,7 @@ fn loopback(cmd_timeout: Duration) -> (M20Link, UdpSocket) {
             max_vy: 1.0,
             max_wz: 2.0,
             cmd_timeout,
+            yaw_map: m20::YawMap::default(),
         },
         Arc::default(),
         Logger::default(),

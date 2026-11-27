@@ -135,7 +135,8 @@ impl DriverManagerNode {
             Protocol::M20 => {
                 let m20_parameters = M20Parameters::declare(&node)?;
                 let config = m20_parameters.config()?;
-                let link = M20Link::open(config, Arc::clone(&health), node.logger().clone())
+                let link =
+                    M20Link::open(config.clone(), Arc::clone(&health), node.logger().clone())
                     .map_err(|e| format!("failed to open the M20 link: {e}"))?;
                 log_info!(
                     node.logger(),
@@ -148,6 +149,21 @@ impl DriverManagerNode {
                     config.max_wz,
                     config.cmd_timeout.as_secs_f64(),
                 );
+                if config.yaw_map.is_active() {
+                    let m = &config.yaw_map;
+                    log_info!(
+                        node.logger(),
+                        "[DriverManagerNode] M20: yaw dead band compensated from {:.2} rad/s: \
+                         left {:?} -> {:?}, right {:?} -> {:?}",
+                        m.min_rate,
+                        m.left.rate,
+                        m.left.command,
+                        m.right.rate,
+                        m.right.command,
+                    );
+                } else {
+                    log_info!(node.logger(), "[DriverManagerNode] M20: yaw sent uncompensated");
+                }
                 (Drive::M20(link), None, Endpoint::M20(m20_parameters))
             }
         };

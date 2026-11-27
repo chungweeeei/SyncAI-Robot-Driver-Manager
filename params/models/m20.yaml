@@ -27,6 +27,32 @@
     max_vy: 1.0    # m/s
     max_wz: 2.0    # rad/s
 
+    # The yaw dead band, compensated (2026-11-27; m20_protocol.rs YawMap has
+    # the argument). Open-loop steps on robot01 in the Basic gait (bag
+    # record/m20_stair_1127/t5_turn_response), body yaw rate from /IMU after
+    # 1.5 s, standing and walking at vx 0.3 / 0.6 alike:
+    #
+    #   angular.z sent   0.3   0.5   0.6 left      0.6 right   0.7    1.0
+    #   body yaw rate    0     0     0.15-0.36     0.49-0.50   0.53   0.93-0.95
+    #
+    # Standing at 0.5 only the hips moved. So MPPI's arcs and swerves (0.15-0.4)
+    # turned nothing, and a route turning 76 deg over 2 m ended 0.5 m off its
+    # plan. Each table is (rate the body turns at -> angular.z sent), linear
+    # between, proportional past the last; the rows are those steps, the left
+    # 0.31 the median of its three 0.6 runs, and 0.55 at rate 0 the edge of the
+    # band between 0.5 (nothing) and 0.6. FIRST TABLES: left 0.6 scattered
+    # 0.15-0.36, the right was stepped only at 0.6, and the Stairs gait not at
+    # all (stair mode turns at 1.0, past both tables: sent 1.06). Below
+    # yaw_map_min_rate the command passes unchanged (zero stays zero, no
+    # twitching on a hold). Changes what the controllers' turn floors buy:
+    # syncai_controller's in_place_wz_min 0.65 now turns the body at ~0.65,
+    # where it turned at ~0.31-0.5. Empty tables = off.
+    yaw_map_left_rate: [0.0, 0.31, 0.53, 0.94]
+    yaw_map_left_command: [0.55, 0.6, 0.7, 1.0]
+    yaw_map_right_rate: [0.0, 0.5, 0.94]
+    yaw_map_right_command: [0.55, 0.6, 1.0]
+    yaw_map_min_rate: 0.05
+
     # cmd_vel is re-sent at 20 Hz (the manual's rate) while younger than this,
     # then the robot is sent zero three times. The backend's teleop publishes at
     # ~10 Hz and the controller at 20 Hz, so 0.3 s rides out two lost messages.

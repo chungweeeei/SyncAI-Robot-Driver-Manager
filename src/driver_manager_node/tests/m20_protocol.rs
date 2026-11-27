@@ -108,3 +108,77 @@ fn timestamp_is_utc_civil_time() {
     assert_eq!(timestamp(1_700_000_000), "2023-11-14 22:13:20");
     assert_eq!(timestamp(951_782_400), "2000-02-29 00:00:00");
 }
+
+/// robot01's first tables (2026-11-27, params/models/m20.yaml)
+fn robot01_map() -> YawMap {
+    YawMap {
+        left: YawSide {
+            rate: vec![0.0, 0.31, 0.53, 0.94],
+            command: vec![0.55, 0.6, 0.7, 1.0],
+        },
+        right: YawSide {
+            rate: vec![0.0, 0.5, 0.94],
+            command: vec![0.55, 0.6, 1.0],
+        },
+        min_rate: 0.05,
+    }
+}
+
+#[test]
+fn yaw_map_inverts_the_measured_response() {
+    let m = robot01_map();
+    // The table's own points
+    assert!((m.compensate(0.31) - 0.6).abs() < 1e-12);
+    assert!((m.compensate(0.53) - 0.7).abs() < 1e-12);
+    assert!((m.compensate(-0.5) + 0.6).abs() < 1e-12);
+    // Between them, linear
+    assert!((m.compensate(0.42) - 0.65).abs() < 1e-12);
+    // Past the last point, proportional (1.0 asked: 1.0 / 0.94 of it)
+    assert!((m.compensate(1.0) - 1.0 / 0.94).abs() < 1e-12);
+    assert!((m.compensate(-1.88) + 2.0).abs() < 1e-12);
+    // A rate just above min_rate lands on the dead band's edge, never under it
+    assert!(m.compensate(0.06) > 0.55);
+    // The sides differ: the left is the weaker
+    assert!(m.compensate(0.4) > -m.compensate(-0.4));
+}
+
+#[test]
+fn yaw_map_leaves_zero_small_and_nonsense_alone() {
+    let m = robot01_map();
+    assert_eq!(m.compensate(0.0), 0.0);
+    assert_eq!(m.compensate(0.04), 0.04);
+    assert_eq!(m.compensate(-0.04), -0.04);
+    assert!(m.compensate(f64::NAN).is_nan());
+    // No table: unchanged
+    let off = YawMap::default();
+    assert!(!off.is_active());
+    assert_eq!(off.compensate(0.3), 0.3);
+    // One side only: the other unchanged
+    let left_only = YawMap {
+        right: YawSide::default(),
+        ..robot01_map()
+    };
+    assert_eq!(left_only.compensate(-0.3), -0.3);
+}
+
+#[test]
+fn yaw_side_refuses_a_table_it_cannot_use() {
+    let side = |rate: Vec<f64>, command: Vec<f64>| YawSide { rate, command }.problem();
+    assert_eq!(side(vec![], vec![]), None);
+    assert_eq!(side(vec![0.0, 0.5], vec![0.55, 0.6]), None);
+    assert!(side(vec![0.0, 0.5], vec![0.55]).is_some());
+    assert!(side(vec![0.0], vec![0.55]).is_some());
+    assert!(side(vec![0.1, 0.5], vec![0.55, 0.6]).is_some());
+    assert!(side(vec![0.0, 0.5, 0.5], vec![0.55, 0.6, 0.7]).is_some());
+    assert!(side(vec![0.0, 0.5], vec![0.6, 0.55]).is_some());
+    assert!(side(vec![0.0, 0.5], vec![0.0, 0.0]).is_some());
+    assert!(side(vec![0.0, f64::NAN], vec![0.55, 0.6]).is_some());
+    assert!(side(vec![0.0, 0.5], vec![-0.1, 0.6]).is_some());
+}
+
+#[test]
+fn gait_names_include_what_the_robot_reports() {
+    assert_eq!(gait_name(0x1001), "basic");
+    assert_eq!(gait_name(0x1003), "stair");
+    assert_eq!(gait_name(4097), "basic");
+}

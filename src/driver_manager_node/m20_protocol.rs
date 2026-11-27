@@ -88,6 +88,10 @@ pub fn gait_name(gait: i64) -> &'static str {
     match gait {
         1 => "basic",
         14 => "stair",
+        // What robot01 reports (2026-11-27): the GaitParam sent, 0x1001 / 0x1003, not the
+        // keyboard script's 1 / 14 -- the log read "unknown" after every switch.
+        0x1001 => "basic",
+        0x1003 => "stair",
         _ => "unknown",
     }
 }
@@ -118,6 +122,102 @@ pub fn velocity_ratio(value: f64, max: f64) -> f64 {
         return 0.0;
     }
     (value / max).clamp(-1.0, 1.0)
+}
+
+/// One side's yaw response, inverted: the yaw rate the body turns at (`rate`, rad/s, from 0 up)
+/// and the cmd_vel `angular.z` that gets it (`command`, rad/s), index for index.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct YawSide {
+    pub rate: Vec<f64>,
+    pub command: Vec<f64>,
+}
+
+/// The M20's yaw dead band, compensated (2026-11-27): the cmd_vel yaw rate asked for -> the yaw
+/// rate to send so that the body turns at it.
+///
+/// Why: robot01, open-loop steps in the Basic gait, standing and walking alike: nothing at
+/// |wz| <= 0.5 (yaw axis 0.25; standing, only the hips move), onset at 0.6 with 0.25-0.84 of the
+/// command (left the weaker), 0.76 at 0.7, 0.93-0.95 at 1.0. MPPI's arcs and swerves ask
+/// 0.15-0.4 and so did not turn the robot: a flat route turning 76 deg over 2 m left it 0.5 m off
+/// its plan, and an avoidance candidate it predicts with a small yaw rate is one the robot does
+/// not drive.
+///
+/// Each side is a table from the measured steps, interpolated linearly; past its last rate the
+/// command scales with the rate asked (the gait is near 1:1 there). Below `min_rate` the command
+/// passes unchanged: zero stays zero, and a rate that small is not one the body can turn at --
+/// mapping it onto the dead band's edge would twitch the robot on every hold. Empty sides (the
+/// default): no compensation.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct YawMap {
+    pub left: YawSide,
+    pub right: YawSide,
+    pub min_rate: f64,
+}
+
+impl YawSide {
+    /// Why the table cannot be used, or `None`: one rate per command, at least two points (or
+    /// none), the rates rising from 0, every value finite and >= 0, the commands not falling.
+    pub fn problem(&self) -> Option<String> {
+        if self.rate.is_empty() && self.command.is_empty() {
+            return None;
+        }
+        if self.rate.len() != self.command.len() || self.rate.len() < 2 {
+            return Some(format!(
+                "{} rates and {} commands: needs the same number, at least 2",
+                self.rate.len(),
+                self.command.len()
+            ));
+        }
+        let ok = |v: &[f64]| v.iter().all(|x| x.is_finite() && *x >= 0.0);
+        if !ok(&self.rate) || !ok(&self.command) {
+            return Some("every value must be finite and >= 0".into());
+        }
+        if self.rate[0] != 0.0 {
+            return Some("the first rate must be 0".into());
+        }
+        if self.rate.windows(2).any(|w| w[1] <= w[0]) {
+            return Some("the rates must rise".into());
+        }
+        if self.command.windows(2).any(|w| w[1] < w[0]) || self.command[self.command.len() - 1] <= 0.0
+        {
+            return Some("the commands must not fall, and the last must be > 0".into());
+        }
+        None
+    }
+
+    /// `rate` (>= 0) -> the command for it; a table that fails `problem()` is never used
+    fn command_for(&self, rate: f64) -> f64 {
+        let n = self.rate.len();
+        if n < 2 {
+            return rate;
+        }
+        let last = n - 1;
+        if rate >= self.rate[last] {
+            return self.command[last] * rate / self.rate[last];
+        }
+        let i = self.rate.partition_point(|r| *r <= rate).clamp(1, last);
+        let (r0, r1) = (self.rate[i - 1], self.rate[i]);
+        let (c0, c1) = (self.command[i - 1], self.command[i]);
+        c0 + (c1 - c0) * (rate - r0) / (r1 - r0)
+    }
+}
+
+impl YawMap {
+    pub fn is_active(&self) -> bool {
+        self.left.rate.len() >= 2 || self.right.rate.len() >= 2
+    }
+
+    /// cmd_vel angular.z [rad/s] -> the angular.z to send [rad/s]; positive is left
+    pub fn compensate(&self, wz: f64) -> f64 {
+        if !wz.is_finite() || wz.abs() < self.min_rate {
+            return wz;
+        }
+        let side = if wz > 0.0 { &self.left } else { &self.right };
+        if side.rate.len() < 2 {
+            return wz;
+        }
+        side.command_for(wz.abs()).copysign(wz)
+    }
 }
 
 pub fn heartbeat_items() -> String {

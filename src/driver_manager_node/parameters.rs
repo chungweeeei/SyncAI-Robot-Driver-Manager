@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use super::health::Thresholds;
 use super::m20_link::M20Config;
+use super::m20_protocol as m20;
 use super::protocol::VelocityGains;
 
 /// Per-direction cmd_vel -> actual velocity correction gains.
@@ -316,6 +317,11 @@ pub struct M20Parameters {
     pub max_wz: ReadOnlyParameter<f64>,
     pub cmd_timeout: ReadOnlyParameter<f64>,
     pub battery_topic: ReadOnlyParameter<Arc<str>>,
+    pub yaw_map_left_rate: ReadOnlyParameter<Arc<[f64]>>,
+    pub yaw_map_left_command: ReadOnlyParameter<Arc<[f64]>>,
+    pub yaw_map_right_rate: ReadOnlyParameter<Arc<[f64]>>,
+    pub yaw_map_right_command: ReadOnlyParameter<Arc<[f64]>>,
+    pub yaw_map_min_rate: ReadOnlyParameter<f64>,
 }
 
 impl M20Parameters {
@@ -377,6 +383,52 @@ impl M20Parameters {
                      battery_state",
                 )
                 .read_only()?,
+            yaw_map_left_rate: table(node, "yaw_map_left_rate", "body yaw rate, turning left")?,
+            yaw_map_left_command: table(
+                node,
+                "yaw_map_left_command",
+                "angular.z sent for each yaw_map_left_rate",
+            )?,
+            yaw_map_right_rate: table(node, "yaw_map_right_rate", "body yaw rate, turning right")?,
+            yaw_map_right_command: table(
+                node,
+                "yaw_map_right_command",
+                "angular.z sent for each yaw_map_right_rate",
+            )?,
+            yaw_map_min_rate: node
+                .declare_parameter("yaw_map_min_rate")
+                .default(0.05)
+                .range(ParameterRange {
+                    lower: Some(0.0),
+                    upper: None,
+                    step: None,
+                })
+                .description(
+                    "Lynx M20: |angular.z| below this passes the yaw map unchanged (rad/s)",
+                )
+                .read_only()?,
+        })
+    }
+
+    /// The yaw dead band's compensation (`m20::YawMap`), or why its tables cannot be used
+    pub fn yaw_map(&self) -> Result<m20::YawMap, Box<dyn Error>> {
+        let side = |rate: &ReadOnlyParameter<Arc<[f64]>>,
+                    command: &ReadOnlyParameter<Arc<[f64]>>,
+                    name: &str|
+         -> Result<m20::YawSide, Box<dyn Error>> {
+            let side = m20::YawSide {
+                rate: rate.get().to_vec(),
+                command: command.get().to_vec(),
+            };
+            match side.problem() {
+                None => Ok(side),
+                Some(problem) => Err(format!("yaw_map_{name}: {problem}").into()),
+            }
+        };
+        Ok(m20::YawMap {
+            left: side(&self.yaw_map_left_rate, &self.yaw_map_left_command, "left")?,
+            right: side(&self.yaw_map_right_rate, &self.yaw_map_right_command, "right")?,
+            min_rate: self.yaw_map_min_rate.get(),
         })
     }
 
@@ -391,8 +443,23 @@ impl M20Parameters {
             max_vy: self.max_vy.get(),
             max_wz: self.max_wz.get(),
             cmd_timeout: Duration::from_secs_f64(self.cmd_timeout.get()),
+            yaw_map: self.yaw_map()?,
         })
     }
+}
+
+/// One of the yaw map's tables: rad/s, read-only, empty by default (no compensation)
+fn table(
+    node: &Node,
+    name: &str,
+    what: &str,
+) -> Result<ReadOnlyParameter<Arc<[f64]>>, DeclarationError> {
+    node.declare_parameter(name)
+        .default(Arc::from(Vec::<f64>::new()))
+        .description(format!(
+            "Lynx M20 yaw dead band compensation: {what} (rad/s); empty = none"
+        ))
+        .read_only()
 }
 
 fn socket_addr(name: &str, ip: &str, port: i64) -> Result<SocketAddr, Box<dyn Error>> {
