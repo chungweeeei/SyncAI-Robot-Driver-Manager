@@ -45,6 +45,18 @@
     # resolve to /<robot_id>/LIDAR/POINTS_UDP and the row would read NO DATA
     # forever) — the one place this node names a topic outside /<robot_id>, and
     # only because the publisher is not ours.
-    monitor_lidar_topic: "/LIDAR/POINTS_UDP"
+    #
+    # The lidar row reads Point-LIO's body_cloud, not /LIDAR/POINTS_UDP
+    # (2026-11-27): the vendor cloud is ~2.8 MB at 10 Hz (~108 k points), and
+    # Fast DDS sends one unicast copy per subscribing process, so this node
+    # subscribing it only to count messages doubled what the relay on
+    # 10.21.31.106 (ROS 2 Foxy, asynchronous publishing) sends every 0.1 s.
+    # robot01 measured the cloud arriving ~78 ms after the relay's stamp with
+    # two subscribers, 3.7 ms of it the network -- latency Point-LIO's pose,
+    # and so the controller, carries. body_cloud is the same scans after
+    # Point-LIO (~1.2 k points), so the row now also goes STALE when Point-LIO
+    # stops; a lidar that stops alone is WARNed by Point-LIO itself
+    # (lidar_source_timeout). Relative: Point-LIO publishes under /<robot_id>.
+    monitor_lidar_topic: "pointlio/body_cloud"
     monitor_lidar_type: "pointcloud2"
     monitor_imu_topic: "/IMU"

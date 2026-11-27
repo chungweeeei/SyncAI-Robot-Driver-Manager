@@ -280,7 +280,7 @@ glance:
 | --- | --- | --- |
 | `telemetry` | datagrams on the telemetry socket | `NO DATA` (never), `OK`, `STALE` (none for `monitor_telemetry_timeout`) |
 | `command` | sends on the command socket | `IDLE` (nothing sent for `monitor_command_idle`: normal while nobody drives), `OK`, `ERROR` (a send failed within the last 2 s, e.g. ICMP port unreachable). UDP has no ack, so the controller can never be shown as down from this side |
-| `lidar` | `monitor_lidar_topic` (G23: `livox/lidar` CustomMsg; M20: `/LIDAR/POINTS_UDP` PointCloud2, absolute because the vendor publishes it without a namespace; `monitor_lidar_type` `livox` / `pointcloud2` picks the message type) | `NO DATA`, `OK`, `STALE` (`monitor_lidar_timeout`) |
+| `lidar` | `monitor_lidar_topic` (G23: `livox/lidar` CustomMsg; M20: `pointlio/body_cloud` PointCloud2 since 2026-11-27 — Point-LIO's scans, not the vendor's `/LIDAR/POINTS_UDP`, because each subscribing process costs the relay one more ~2.8 MB unicast copy every 0.1 s, so the row also goes `STALE` when Point-LIO stops; `monitor_lidar_type` `livox` / `pointcloud2` picks the message type) | `NO DATA`, `OK`, `STALE` (`monitor_lidar_timeout`) |
 | `imu` | `monitor_imu_topic` (`sensor_msgs/Imu`; G23: `livox/imu`, the MID360's; M20: the vendor's `/IMU`) | `NO DATA`, `OK`, `STALE` (`monitor_imu_timeout`). Its own row, not part of `lidar`, because the two stop independently (separate UDP ports on the MID360, separate sources on the M20) |
 | `camera` | `image_raw/compressed` from `syncai_camera_feeder` | `NO DATA`, `OK`, `STALE` (`monitor_camera_timeout`) |
 
